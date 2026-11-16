@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Any
 
@@ -49,6 +49,7 @@ LOAD_SKILL_SCHEMA: dict[str, Any] = {
         "description": (
             "再装一份规程（决策卡：管哪几个决定、判断要点、怎么说），或者取已装规程的某一节细节。"
             "id 从系统提示里的规程目录里选；要细节时带 section（决策卡后面列的分节编号或名字，写「全部」取整份）。"
+            "算营养、选方案、检查计划、判断疼痛、看趋势这类专业工具跟着规程走：工具列表里没有要用的，先装对应的规程。"
         ),
         "parameters": {
             "type": "object",
@@ -74,18 +75,27 @@ APP_HELP_SCHEMA: dict[str, Any] = {
 }
 
 
+def _skill_words(skill: Skill, flags: Collection[str] = ()) -> str:
+    """整份规程的文字加它带的工具名：用来看它提到了哪些专业工具（§212）。"""
+    return skill.text(flags, full=True) + " " + " ".join(skill.toolset)
+
+
 async def _load_skill(box: Toolbox, args: Mapping[str, Any]) -> str:
     skill = by_id(str(args.get("id", "")).strip())
     if skill is None:
         return "没有这个规程编号，请从目录里选。"
     box.adopt(e for r in skill.refs_for(box.flags) if (e := box.kb.get(r)) is not None)
+    # 这份规程提到的专业工具这时才给（§212）：取一节也算装上了
+    more = box.open_pro(box.pro_named(_skill_words(skill, box.flags)))
     which = str(args.get("section") or "").strip()
     if which:  # 取一节细节（§99）
         part = skill.section(which)
-        return part if part is not None else f"没有这一节。{skill.name}的分节：{skill.index()}"
+        if part is None:
+            return f"没有这一节。{skill.name}的分节：{skill.index()}"
+        return part + ("\n\n装上后多了这些工具：" + "、".join(more) + "。" if more else "")
     text = skill.text(box.flags)
     # 规程带的动作工具（改计划、新计划、记训练）这时才开放（§120）
-    opened = box.actions.unlock(skill.toolset) if box.actions is not None else []
+    opened = [*(box.actions.unlock(skill.toolset) if box.actions is not None else []), *more]
     if opened:
         text += "\n\n装上后多了这些工具：" + "、".join(opened) + "。"
     held = getattr(
@@ -244,6 +254,8 @@ async def respond(
             [*ALWAYS, *([ASK_TERMS] if training else []), *(t for x in skills for t in x.toolset)]
         )
     actions = actions_prompt(has_plan=has_plan, confirmed=confirmed, just_asked=just_asked)
+    # 专业工具只给这一轮装着的规程提到的（§212）：没装规程的轮次（闲聊、记一餐）不带，中途装了再开
+    toolbox.pro_open = {n for x in skills for n in toolbox.pro_named(_skill_words(x, flags))}
     toolbox.actions_held = "" if training else actions
     system = _PROMPT.format(
         tone=BUDDY,

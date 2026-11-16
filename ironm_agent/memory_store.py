@@ -113,6 +113,29 @@ class Item:
     key: str = ""  # 同一件事的键：同键只有一条生效（§148）
 
 
+class StaleMemory(Exception):
+    """要改的那条记忆已经被别处改掉了（被取代或删了）：这一轮的改动整体不写（§207）。"""
+
+
+HELD_MAX = 5  # 没记下的话最多留最近几句（§204）
+HELD_DAYS = 7  # 留几天，过了不再补记
+
+
+@dataclass(frozen=True)
+class Held:
+    """回答后整理记忆没成功、先留着的一句话（§204）：下一次整理时一起交给模型。"""
+
+    id: str
+    text: str  # 开头写明哪天说的，句子里的"今天、昨晚"已经换成日期
+    at: datetime
+
+
+def _waiting(rows: Sequence[Held], at: datetime | None) -> list[Held]:
+    """还在留着的：7 天内、最近 5 句，早说的在前。"""
+    cut = (at or now()) - timedelta(days=HELD_DAYS)
+    return sorted((h for h in rows if h.at >= cut), key=lambda h: h.at)[-HELD_MAX:]
+
+
 @dataclass(frozen=True)
 class Change:
     """提取结果落到存储上的一步：新增一条，或改一条的状态。"""
@@ -136,6 +159,9 @@ class MemoryStore(Protocol):
     ) -> bool: ...
     async def paused(self, user_id: str) -> bool: ...
     async def set_paused(self, user_id: str, paused: bool) -> None: ...
+    async def hold(self, user_id: str, text: str, at: datetime | None = None) -> None: ...
+    async def held(self, user_id: str, at: datetime | None = None) -> list[Held]: ...
+    async def release(self, user_id: str, ids: Sequence[str]) -> None: ...
 
 
 def chain(items: Sequence[Item], item_id: str) -> set[str]:
@@ -155,6 +181,7 @@ class MemoryBook:
     def __init__(self) -> None:
         self._items: dict[str, list[Item]] = {}
         self._paused: set[str] = set()
+        self._held: dict[str, list[Held]] = {}
 
     async def items(
         self, user_id: str, *, current_only: bool = True, recent: date | None = None
@@ -170,6 +197,9 @@ class MemoryBook:
 
     async def apply(self, user_id: str, changes: Sequence[Change]) -> None:
         rows = self._items.setdefault(user_id, [])
+        live = {x.id for x in rows if x.status != "superseded"}
+        if any(c.kind == "status" and c.status == "superseded" and c.id not in live for c in changes):
+            raise StaleMemory  # 要取代的那条已经被别处改掉：整批不写（§207）；撤销（从被取代改回来）不算
         for c in changes:
             if c.kind == "insert" and c.item is not None:
                 rows.append(c.item)
@@ -182,7 +212,7 @@ class MemoryBook:
         rows = self._items.get(user_id, [])
         for i, x in enumerate(rows):
             if x.id == item_id and x.status != "superseded":
-                cat, data, key = _fields(x.category, content)
+                cat, data, key = _edited(x, content) or (x.category, x.data, x.key)
                 rows[i] = replace(x, content=content, origin="edited", updated=now(), category=cat,
                                   data=data, key=key,
                                   status="active" if x.status == "pending" else x.status)  # fmt: skip
@@ -220,6 +250,20 @@ class MemoryBook:
 
     async def set_paused(self, user_id: str, paused: bool) -> None:
         (self._paused.add if paused else self._paused.discard)(user_id)
+        if paused:  # 暂停了：留着等补记的话也不要了（§204）
+            self._held.pop(user_id, None)
+
+    async def hold(self, user_id: str, text: str, at: datetime | None = None) -> None:
+        rows = self._held.setdefault(user_id, [])
+        if all(h.text != text for h in rows):  # 同一句不重复留
+            rows.append(Held(new_id(), text, at or now()))
+        self._held[user_id] = sorted(rows, key=lambda h: h.at)[-HELD_MAX:]
+
+    async def held(self, user_id: str, at: datetime | None = None) -> list[Held]:
+        return _waiting(self._held.get(user_id, []), at)
+
+    async def release(self, user_id: str, ids: Sequence[str]) -> None:
+        self._held[user_id] = [h for h in self._held.get(user_id, []) if h.id not in set(ids)]
 
 
 DDL = (
@@ -248,6 +292,16 @@ CREATE TABLE IF NOT EXISTS ironm_memory_state (
     updated_at timestamptz NOT NULL DEFAULT now()
 )
 """,
+    # 没记下、等下次补记的话（§204）；content 加密
+    """
+CREATE TABLE IF NOT EXISTS ironm_memory_held (
+    id      text PRIMARY KEY,
+    user_id text NOT NULL,
+    content text NOT NULL,
+    said_at timestamptz NOT NULL DEFAULT now()
+)
+""",
+    "CREATE INDEX IF NOT EXISTS ironm_memory_held_user ON ironm_memory_held (user_id, said_at)",
 )
 
 # content、evidence 是加密后的文字；加密失败时 encrypt_content 返回 NULL，NOT NULL 约束让这一条写不进去
@@ -299,6 +353,21 @@ def _fields(category: Category, content: str) -> tuple[Category, dict[str, Any],
     return cast(Category, cat), data, key_of(cat, data)
 
 
+def _edited(x: Item, content: str) -> tuple[Category, dict[str, Any], str] | None:
+    """他在"我"页改了一条的内容：伤病、器械这类按新内容重新补字段（§148、§150）；喜好、饮食、风格的主题
+    在新内容里还找得到就留着，找不到说明说的已经是别的东西，主题去掉（§207）。别的类别不动（返回 None）。"""
+    from ironm_agent.facts import STRUCTURED
+    from ironm_agent.memory_extract import TOPICAL, norm
+
+    if x.category in STRUCTURED:
+        return _fields(x.category, content)
+    if x.category in TOPICAL and x.key:
+        topic = str(x.data.get("topic") or "")
+        fits = bool(topic) and norm(topic) in norm(content)
+        return (x.category, dict(x.data), x.key) if fits else (x.category, {}, "")
+    return None
+
+
 def _filled(x: Item) -> Item | None:
     """还没补字段的伤病、特殊情况、器械、可练时间（§148、§150 之前记的）：按内容补上；补不出返回 None。
     系统从训练记录推出的作息（"通常在周一、周三练"）不带键：两条推出来的不互相顶掉（复核 11-03）。"""
@@ -322,12 +391,15 @@ class PgMemory:
     def __init__(self) -> None:
         self._ready = False
 
-    async def _q(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        from mirobody.utils.db import execute_query
-
+    async def _prepare(self) -> None:
         if not self._ready:
             await run_ddl(*DDL)
             self._ready = True
+
+    async def _q(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        from mirobody.utils.db import execute_query
+
+        await self._prepare()
         rows = await execute_query(sql, params or {}, log_sql=False)
         return rows if isinstance(rows, list) else []
 
@@ -355,10 +427,15 @@ class PgMemory:
         return out
 
     async def apply(self, user_id: str, changes: Sequence[Change]) -> None:
+        """一轮的改动放在一个事务里（§204）：要么都生效，要么都不生效。
+        更新一条是"旧的作废 + 写入新的"两句，分开提交时新的写不进去（加密失败、连接断），旧的就白白作废了。"""
+        from mirobody.utils.db import transaction
+
+        work: list[tuple[str, dict[str, Any]]] = []
         for c in changes:
             if c.kind == "insert" and c.item is not None:
                 x = c.item
-                await self._q(
+                work.append((
                     "INSERT INTO ironm_memory (id, user_id, category, content, evidence, origin,"
                     " status, supersedes, until, created_at, updated_at, data, key) VALUES (:id, :uid,"
                     " :category, encrypt_content(:content), encrypt_content(:evidence), :origin, :status,"
@@ -368,17 +445,25 @@ class PgMemory:
                      "evidence": x.evidence, "origin": x.origin, "status": x.status,
                      "supersedes": x.supersedes, "until": x.until, "created": x.created, "updated": x.updated,
                      "data": _dumps(x.data), "key": x.key or None},
-                )  # fmt: skip
+                ))  # fmt: skip
             elif c.kind == "status":
-                await self._q(
+                # 取代一条时它得还没被取代（§207）；撤销（从被取代改回来，改目标时用）不受这个限制
+                guard = " AND status <> 'superseded'" if c.status == "superseded" else ""
+                work.append((
                     "UPDATE ironm_memory SET status = :status, updated_at = now()"
-                    " WHERE id = :id AND user_id = :uid",
+                    f" WHERE id = :id AND user_id = :uid{guard} RETURNING id",
                     {"status": c.status, "id": c.id, "uid": user_id},
-                )
+                ))  # fmt: skip
+        if not work:
+            return
+        await self._prepare()
+        async with transaction() as tx:
+            for sql, params in work:
+                got = await tx.execute(sql, params)
+                if sql.startswith("UPDATE") and params["status"] == "superseded" and not got:
+                    raise StaleMemory  # 这条已经被别处改掉（别的进程、他自己删了）：整批退回（§207）
 
     async def edit(self, user_id: str, item_id: str, content: str) -> Item | None:
-        from ironm_agent.facts import STRUCTURED
-
         rows = await self._q(
             "UPDATE ironm_memory SET content = encrypt_content(:content), origin = 'edited',"
             " status = CASE WHEN status = 'pending' THEN 'active' ELSE status END, updated_at = now()"
@@ -388,9 +473,10 @@ class PgMemory:
         if not rows:
             return None
         got = await self._one(user_id, item_id)
-        if got is not None and got.category in STRUCTURED:  # 改了内容：字段跟着补（§148、§150）
-            cat, data, key = _fields(got.category, content)
-            await self.set_fields(user_id, item_id, cat, data, key)
+        new = _edited(got, content) if got is not None else None
+        # 改了内容：字段跟着补（§148、§150）；主题对不上了就去掉（§207）
+        if got is not None and new is not None and new != (got.category, got.data, got.key):
+            await self.set_fields(user_id, item_id, *new)
             got = await self._one(user_id, item_id)
         return got
 
@@ -441,6 +527,43 @@ class PgMemory:
             " ON CONFLICT (user_id) DO UPDATE SET paused = EXCLUDED.paused, updated_at = now()",
             {"uid": user_id, "paused": paused},
         )
+        if paused:  # 暂停了：留着等补记的话也不要了（§204）
+            await self._q("DELETE FROM ironm_memory_held WHERE user_id = :uid", {"uid": user_id})
+
+    async def _all_held(self, user_id: str) -> list[Held]:
+        rows = await self._q(
+            "SELECT id, decrypt_content(content) AS content, said_at FROM ironm_memory_held"
+            " WHERE user_id = :uid ORDER BY said_at",
+            {"uid": user_id},
+        )
+        return [Held(str(r["id"]), str(r.get("content") or ""), r["said_at"]) for r in rows]
+
+    async def hold(self, user_id: str, text: str, at: datetime | None = None) -> None:
+        """留一句等下次补记：同一句不重复留；过了 7 天的、超出最近 5 句的顺手清掉。"""
+        at = at or now()
+        rows = await self._all_held(user_id)
+        if all(h.text != text for h in rows):
+            mine = Held(new_id(), text, at)
+            await self._q(
+                "INSERT INTO ironm_memory_held (id, user_id, content, said_at)"
+                " VALUES (:id, :uid, encrypt_content(:content), :at)",
+                {"id": mine.id, "uid": user_id, "content": text, "at": at},
+            )
+            rows.append(mine)
+        keep = {h.id for h in _waiting(rows, at)}
+        gone = sorted(h.id for h in rows if h.id not in keep)
+        if gone:
+            await self.release(user_id, gone)
+
+    async def held(self, user_id: str, at: datetime | None = None) -> list[Held]:
+        return _waiting(await self._all_held(user_id), at)
+
+    async def release(self, user_id: str, ids: Sequence[str]) -> None:
+        if ids:
+            await self._q(
+                "DELETE FROM ironm_memory_held WHERE user_id = :uid AND id = ANY(:ids)",
+                {"uid": user_id, "ids": sorted(ids)},
+            )
 
 
 _default: PgMemory | None = None

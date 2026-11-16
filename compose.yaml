@@ -67,6 +67,7 @@ services:
     # 只把下面这几项可选设置从 .env 交给容器（没写的就不设）。不整份读 .env：
     # 那里面给 scripts/start.sh 用的数据库密码、密钥、开发用的固定验证码会盖过这里的设置。
     environment:
+      TZ: ${TZ:-Asia/Shanghai}   # 日期和钟点按这个时区算（§204）；不设的话容器按 UTC，凌晨说的"今天"会算成前一天
       IRONM_PORT: ${IRONM_PORT:-18090}
       IRONM_IMAGES: ${IRONM_IMAGES:-1}
       IRONM_VOICE: ${IRONM_VOICE:-1}

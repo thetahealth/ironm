@@ -808,3 +808,8 @@ router.include_router(_video)
 from ironm_agent.web_video_plan import router as _video_plan  # noqa: E402
 
 router.include_router(_video_plan)
+
+# 连锁店菜单库（spec [2026-10-23] §203）
+from ironm_agent.web_chains import router as _chains  # noqa: E402
+
+router.include_router(_chains)

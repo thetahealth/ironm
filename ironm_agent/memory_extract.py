@@ -64,10 +64,38 @@ _PROMPT = """你负责替健身教练团队记住"这个用户本人"的情况�
 7. 没有要记的，输出空列表。
 
 8. event 写 until（到哪天为止，YYYY-MM-DD，含这天），按今天的日期算："这周"写这周日，"这两天"写明天，"这几天"写 3 天后，"下周"写下周日，说了具体日子照写；实在看不出写 7 天后。
+9. preference、diet、style 写 topic：这条说的是哪样东西，一个词（跑步、牛肉、蛋白粉、回答长短），要是他的话或 content 里有的词。已有记忆写了主题、说的又是同一样东西，就用同一个词；同一样东西有了新说法（原来喜欢、现在不想了；原来不吃、现在吃了），用 update 指向原来那条。
 
-只输出 JSON：{"ops": [{"op": "add|update|resolve|confirm", "target": "已有记忆的编号（add 不写）", "category": "...", "content": "...", "quote": "...", "inferred": false, "lasting": "long|short", "until": "event 才写"}]}"""
+只输出 JSON：{"ops": [{"op": "add|update|resolve|confirm", "target": "已有记忆的编号（add 不写）", "category": "...", "content": "...", "quote": "...", "inferred": false, "lasting": "long|short", "until": "event 才写", "topic": "preference、diet、style 才写"}]}"""
+
+# 回答后既要整理记忆又要记今天的状态时，合成一次调用（§207）：在上面的提示词后面加这一段
+_STATE_PROMPT = """
+
+先照上面的规则把 ops 写完（和只整理记忆时写的一模一样，下面的内容不改变 ops 该记什么）。
+然后另外加一个 "state"：他这一轮有没有说自己今天身体的状况——哪里疼（在做哪个动作、左右、多疼）、生病了或病好了、累、昨晚睡了几小时、今天只能练多少分钟、状态很好。只写他这一轮说了的；问话、假设、说别人的不写；前面说过的不再写一遍；没说就写 {}。
+state 里"疼"只指关节、某一处一按就疼、扭了拉了；练完肌肉酸是练后酸痛，state 里不写疼也不写生病。
+他这句是在回答教练上一句的问话时（"好多了"回的是"感冒好些了吗"），按回答的意思写（好些了）。
+例：他说"前天练了背，现在胳膊抬起来都酸" → ops 里照记一条 event（近况），state 写 {}（练后酸痛不算疼）；他说"今天好累，昨晚只睡了 5 小时" → ops 里照记 event，state 写 {"tired": true, "sleep": 5}。
+state 的字段（没说的不写）：__PROPS__
+输出：{"ops": [...], "state": {...}}"""
+
+
+def _state_prompt() -> str:
+    from ironm_agent.body_state import STATE_SCHEMA_PROPS  # 字段只定义一处（§163）
+
+    return _STATE_PROMPT.replace("__PROPS__", json.dumps(STATE_SCHEMA_PROPS, ensure_ascii=False))
+
 
 UNTIL_DAYS = 60  # 近况最多记多少天
+TOPICAL = ("preference", "diet", "style")  # 按主题认同一件事（§207）；主题由模型写，代码不按关键词猜
+TOPIC_CHARS = 8
+
+
+def topic_of(raw: Mapping[str, Any], content: str, quote: str) -> str:
+    """模型写的主题词：两到八个字、在他的话或记下的内容里找得到才用；对不上就当没写（§207）。"""
+    topic = str(raw.get("topic") or "").strip()
+    t = norm(topic)
+    return topic if 2 <= len(t) <= TOPIC_CHARS and t in norm(f"{quote}\n{content}") else ""
 
 # 明显是临时的说法（spec [2026-10-23] §55 需求 7）：记成近期事件，不改长期的器械、时间和目标
 # 改原来那条时：带这些词的都算临时；新增一条时只认更明确的（"这周买了壶铃"不是临时的）
@@ -136,6 +164,16 @@ class Extraction:
     rejected: list[str] = field(default_factory=list)  # 被拒的原因（不含记忆内容，可以进日志）
     confirmed: set[str] = field(default_factory=set)  # 推测的说对了、换成的新条目（不再当新说的事）
     failed: str = ""  # 模型没能给出结果的原因
+    state: dict[str, Any] = field(default_factory=dict)  # 他这一轮说的今天的状态（要了才有，§207）
+
+
+HELD_CHARS = 500  # 留着等补记的一句最多几个字
+
+
+def held_line(text: str, day: date) -> str:
+    """没记下、留着等下次补记的一句（§204）：开头写明哪天说的，"今天、昨晚"按那天换成日期，一句一行。"""
+    said = absolute(" ".join(text.split()), day)[:HELD_CHARS]
+    return f"（{day.month}月{day.day}日说的）{said}"
 
 
 def handles(items: Sequence[Item]) -> dict[str, Item]:
@@ -150,9 +188,11 @@ def messages_for(
     answer: str,
     context: Sequence[str],
     held: Sequence[str] = (),
+    state: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     known = "\n".join(
         f"{h}：{x.category}｜{x.content}｜{_STATUS_NAMES.get(x.status, x.status)}"
+        + (f"｜主题：{x.data['topic']}" if x.category in TOPICAL and x.data.get("topic") else "")
         for h, x in items.items()
     )
     parts = [f"已有记忆（编号：类别｜内容｜状态）：\n{known or '（无）'}"]
@@ -160,13 +200,16 @@ def messages_for(
         parts.append("这次会话里用户前面说过的话（只用来理解指代，不从这里摘 quote）：\n"
                      + "\n".join(context))  # fmt: skip
     if held:
-        parts.append("用户前面说过、还没整理成记忆的话（也可以从这里摘 quote）：\n"
+        parts.append("用户前面说过、还没整理成记忆的话（也可以从这里摘 quote；开头括号里是说的那天，"
+                     "句子里的日期已经写好，记这些话里的事时 content 照写那个日期，不写「今天」）：\n"
                      + "\n".join(f"用户：{x}" for x in held))  # fmt: skip
+    if state:  # 记状态要用的前情（正在生病：他说"好多了"才对得上）
+        parts.append("记 state 时参考（不从这里摘 quote）：\n" + "\n".join(state))
     parts.append(f"这一轮：\n用户：{user_text}\n教练：{answer[:ANSWER_CHARS] or '（无）'}")
     today = date.today()
     parts.append(f"今天是 {today.isoformat()}（周{'一二三四五六日'[today.weekday()]}）。")
     return [
-        {"role": "system", "content": _PROMPT},
+        {"role": "system", "content": _PROMPT + (_state_prompt() if state is not None else "")},
         {"role": "user", "content": "\n\n".join(parts)},
     ]
 
@@ -246,6 +289,9 @@ def _problem(
     allowed = digits(quote, chinese=True) | (
         digits(target.content, chinese=True) if target else set()
     )
+    for line in held.split("\n"):  # 原话出自留着的那句（§204）：那句开头写的哪天说的也算他说的
+        if line.startswith("（") and "说的）" in line and norm(quote) in norm(line):
+            allowed |= digits(line.split("说的）", 1)[0])
     if not digits(content) <= allowed:
         return None, "内容里有原话里没有的数字"
     # 某一次的训练、某一顿饭不进训练水平和饮食习惯，最多是当天的近况（§109 需求 5，和 §103 一致）
@@ -261,8 +307,8 @@ def _problem(
         if not content:
             return None, "内容是教练说的，不是他说的"
     inferred = raw.get("inferred") is True and category not in ("advice", "followup")
-    if category == "injury" and not inferred and _unsaid(content, quote):
-        inferred = True  # 左右、诊断词原话里没有：是推测的，先放着等他确认
+    if category == "injury" and not inferred and _unsaid(content, quote + (target.content if target else "")):
+        inferred = True  # 左右、诊断词原话里没有（更新时原来那条里也没有，§215）：是推测的，先放着等他确认
     if category in _PROFILE_FACTS and kind == "add" and asked_in(quote, f"{user_text}\n{held}"):
         inferred = True  # 问句里带出的（"肌酐高了怎么办"）不等于他有这件事：待确认（§109 需求 2）
     short = (raw.get("lasting") == "short" and category in _PROFILE) or once  # 只关于某一天、这几天
@@ -285,8 +331,9 @@ def _problem(
         if older is not None:  # 同一件事（蛋白质每天多少）的新建议：取代旧的那条
             kind, target = "update", older
     ended = (category == "event" and bool(_ENDED.search(content))) or (
-        category == "injury" and bool(_HEALED.search(content)) and not _STILL.search(content)
-    )  # 伤病说好了也按结束（§158）
+        category == "injury" and bool(_HEALED.search(content))
+        and not _STILL.search(content) and not _STILL.search(quote)
+    )  # 伤病说好了也按结束（§158）；原话是"好多了、还有点"这类好转的说法不算好了，旧伤照旧生效（§215）
     if kind == "update" and ended:
         kind = "resolve"  # 更新成"已经结束"就是已解决
     if (
@@ -310,8 +357,9 @@ def _problem(
             data["side"] = target.data["side"]
         key = key_of(category, data)
         side = str(data.get("side") or "")
-        if side and not inferred and not said_side(side, quote):
-            inferred = True  # 左右原话里没说：推测的，先放着等他确认
+        known_side = target is not None and target.category == category and target.data.get("side") == side
+        if side and not inferred and not known_side and not said_side(side, quote):
+            inferred = True  # 左右原话里没说（原来那条也不是这一侧，§215）：推测的，先放着等他确认
         same = next((x for x in items.values() if key and x.key == key
                      and x.status in ("active", "pending") and x is not target), None)  # fmt: skip
         # 同一件事（同部位同侧、同一种特殊情况）说法变了：更新那一条；一样的照旧当成已经记着了。
@@ -338,6 +386,17 @@ def _problem(
         if data.get("kind") == "术后" and not data.get("since"):
             data["since"] = (today or date.today()).isoformat()
         key = key_of(category, data)  # 沿用了原来的字段（每周几次、左右）：键按最后的字段算（§150）
+    elif category in TOPICAL:  # 喜好、饮食、风格：同类同主题是同一件事，新说法替换旧的（§207）
+        topic = topic_of(raw, content, quote) or (
+            str(target.data.get("topic") or "") if target is not None and target.category == category else ""
+        )  # 更新时没再写主题：沿用原来那条的
+        if topic:
+            data, key = {"topic": topic}, f"{category}:{norm(topic)}"
+            same = next((x for x in items.values() if x.key == key
+                         and x.status in ("active", "pending") and x is not target), None)  # fmt: skip
+            if (kind == "add" and same is not None and norm(same.content) != norm(content)
+                    and not (inferred and same.status == "active")):  # 推测的不顶掉他说过的  # fmt: skip
+                kind, target = "update", same
     content = absolute(content, today or date.today())  # "今天"写成日期（§103），数字核对在这之前
     op = Op(cast(Literal["add", "update", "resolve", "confirm"], kind), cast(Category, category), content,
             quote, target, inferred, until, data, key)  # fmt: skip
@@ -379,12 +438,26 @@ def own_part(content: str, said: str, answer: str) -> str:
     return "，".join(keep)
 
 
+def _touches(clause: str, key: str) -> bool:
+    """这一小句和原话片段有没有重合：谁包含谁，或者首尾接上至少两个字。"""
+    c = norm(clause)
+    if not c or not key:
+        return False
+    if c in key or key in c:
+        return True
+    return any(key.startswith(c[i:]) for i in range(1, len(c) - 1)) or any(
+        key.endswith(c[:i]) for i in range(2, len(c))
+    )
+
+
 def asked_in(quote: str, text: str) -> bool:
-    """原话片段所在的那句话是不是在问（"肌酐含量高了怎么办""今天不是周一吗"）。"""
+    """原话片段所在的那一小句是不是在问（"肌酐含量高了怎么办""今天不是周一吗"）。
+    一句话里先说了自己的情况、后面才问的（"我膝盖不好，上下楼梯会疼，还能跳绳吗"），陈述的那几小句不算（§215）。"""
     key = norm(quote)
     for sentence in re.split(r"(?<=[。！!？?\n])", text):
         if key and key in norm(sentence):
-            return bool(_ASKING.search(sentence.strip()))
+            clauses = [c for c in _CLAUSE.split(sentence) if _touches(c, key)]
+            return any(_ASKING.search(c.strip()) for c in clauses or [sentence])
     return False
 
 
@@ -629,30 +702,30 @@ async def extract(
     answer: str,
     context: Sequence[str] = (),
     held: Sequence[str] = (),
+    state: Sequence[str] | None = None,
 ) -> Extraction:
     """调一次模型提取这一轮的记忆；模型不可用或输出不对时返回空结果，不向外抛。
 
-    held：前几轮判断为不用提取、先留着的用户原话（spec [2026-10-23] §17），原话片段也可以出自这里。
+    held：前面没记下、先留着的用户原话（§204），原话片段也可以出自这里。
+    state：给了（空列表也算）就让模型在同一次调用里把他说的今天的状态也交出来（§207），放在结果的 state 里，
+    由调用的地方照 §163 的规则写；不给时提示词和原来一样。
     """
     known = handles(items)
     try:
-        reply = await llm.chat("memory", messages_for(known, user_text, answer, context, held),
+        reply = await llm.chat("memory", messages_for(known, user_text, answer, context, held, state),
                                json_mode=True)  # fmt: skip
     except ModelUnavailable as e:
         return Extraction(failed=f"模型不可用：{e}")
-    ops, rejected = validate(parse_json(reply.content), known, user_text, answer, held)
+    raw = parse_json(reply.content)
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("ops"), list):
+        return Extraction(rejected=["输出不是规定格式的 JSON"], failed="输出不是规定格式")  # 这句留着下次补记（§204）
+    ops, rejected = validate(raw, known, user_text, answer, held)
     if rejected:
         _log.info("memory ops rejected: %s", json.dumps(rejected, ensure_ascii=False))
     changes = changes_of(ops)
     guesses = {o.target.id for o in ops if o.op == "confirm" and o.target is not None and o.target.status == "pending"}
     confirmed = {c.item.id for c in changes if c.item is not None and c.item.supersedes in guesses}
-    return Extraction(changes, rejected, confirmed=confirmed)
+    told = raw.get("state") if state is not None else None
+    said = {k: v for k, v in told.items() if v not in (None, "", [])} if isinstance(told, Mapping) else {}
+    return Extraction(changes, rejected, confirmed=confirmed, state=said)
 
-
-# ---- 按需提取（spec [2026-10-23] §17）：先用规则判断这一轮可能含个人信息，才调用模型 ----------------
-
-# 身体不适和近期状况：问句里也多半是在说自己（"感冒了还能去健身吗"）
-_HURT = re.compile(r"疼|痛|伤|肿|麻|扭|不舒服|(?<!肌)酸|感冒|发烧|生病|没睡|熬夜|失眠|月经|经期")
-_QUESTION = re.compile(
-    r"吗|呢|？|\?|怎么|如何|什么|多少|几[次组个天]|要不要|能不能|可不可以|是不是|该不该|哪"
-)

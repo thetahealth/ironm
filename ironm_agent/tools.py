@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,9 +27,9 @@ STEP_NAMES = {
     "search_knowledge": "查资料", "search_exercises": "查动作", "query_health_indicators": "看你的健康数据",
     "compute_metrics": "算指标", "plan_templates": "挑方案", "check_plan": "检查计划",
     "propose_new_plan": "排计划", "propose_plan_edit": "改计划", "propose_temporary_change": "排临时调整", "propose_diet_plan": "换饮食方案", "compose_diet_plan": "排饮食计划",
-    "log_workout": "记训练", "recall_memory": "翻你以前说的", "estimate_strength": "估重量",
+    "log_workout": "记训练", "recall_memory": "翻你以前说的", "read_chat": "翻这次聊天", "estimate_strength": "估重量",
     "find_substitutes": "找替代动作", "training_patterns": "看训练记录", "pain_check": "判断疼痛",
-    "nutrition_calc": "算营养", "cardio_calc": "算有氧时长", "diet_templates": "查饮食方案", "trend_analysis": "看趋势", "explain_trends": "解读数据",
+    "nutrition_calc": "算营养", "chain_menu": "查连锁店菜单", "cardio_calc": "算有氧时长", "diet_templates": "查饮食方案", "trend_analysis": "看趋势", "explain_trends": "解读数据",
     "app_help": "查 App 用法", "search_web": "联网查", "query_weather": "查天气", "load_skill": "翻做法", "timeline": "看时间线",
 }  # fmt: skip
 QUIET_STEPS = frozenset({"record_state", "remember"})  # 每轮顺手记的，不当一步给他看
@@ -50,6 +51,34 @@ type MedicalSearch = Callable[[str, str], Awaitable[str]]
 type ExtraTool = Callable[["Toolbox", Mapping[str, Any]], Awaitable[str]]
 
 
+def compact_params(schema: Mapping[str, Any], notes: Mapping[str, str]) -> dict[str, Any]:
+    """底座工具的参数说明换成简短的中文（§213）：只换 notes 里写了的那几个参数的说明，参数名、可选值、
+    默认值、格式、上限照旧；底座以后加的新参数照它原来的说明带上。不改底座的原件。"""
+    out = copy.deepcopy(dict(schema))
+    for name, prop in (out.get("properties") or {}).items():
+        if name in notes and isinstance(prop, dict):
+            prop["description"] = notes[name]
+    return out
+
+
+# 看健康数据、查用药记录的参数说明：底座带的是英文长句，每轮都发给模型，这里是意思相同的中文（§213）
+_HEALTH_PARAMS = {
+    "keywords": "不知道指标名时的关键词（中英文、症状都行，如 [\"血压\"]）；和 indicators 都不写就返回他有哪些数据的目录",
+    "indicators": "上次结果里的确切指标名，知道了优先用，可写几个",
+    "start": "开始日期（含）YYYY-MM-DD，他当地的日期；两个日期都不写是全部记录",
+    "end": "结束日期（含）",
+    "view": "raw 原始读数（新的在前，带来源文件）；minute/hour/day/week/month 每段一个点，看趋势；"
+            "stats 这段时间的条数、最小、最大、平均、合计、首末值、变化，看总量、变化和基线；latest 每个指标最近一次",
+}  # fmt: skip
+_MEDS_PARAMS = {
+    "view": "plan 用药清单：打算吃的药、各方案的状态、今天各次的情况（不是服药记录）；"
+            "log 实际记下吃了或跳过的各次；history 各疗程的开始、结束和结束原因（问什么时候换的药）",
+    "keywords": "药名或编码（中英文、写一部分都行），缩小范围；不写是全部用药",
+    "start": "开始日期（含）YYYY-MM-DD。plan/history：这段时间里生效过的方案或疗程；log：这段时间里记的各次（默认近 30 天）",
+    "end": "结束日期（含）",
+}  # fmt: skip
+
+
 def _meds_schema() -> dict[str, Any]:
     from mirobody.kernel.meds import TOOL_SCHEMA
 
@@ -62,7 +91,7 @@ def _meds_schema() -> dict[str, Any]:
                 "如降压药（尤其β受体阻滞剂会让心率偏低）、胰岛素和降糖药（运动时防低血糖）。"
                 "没有返回说明没有记录，不代表没在吃药；不建议改药、停药。"
             ),
-            "parameters": TOOL_SCHEMA,
+            "parameters": compact_params(TOOL_SCHEMA, _MEDS_PARAMS),
         },
     }
 
@@ -143,7 +172,7 @@ def _health_schema() -> dict[str, Any]:
                 "问变化、平均、基线用 view=stats，问趋势用 view=day 或 week，问现在多少用 view=latest。"
                 "返回的每行有 rid（如 r3），引用这行数据时用它。没有返回某个指标，说明没有记录，不代表正常。"
             ),
-            "parameters": TOOL_SCHEMA,
+            "parameters": compact_params(TOOL_SCHEMA, _HEALTH_PARAMS),
         },
     }
 
@@ -272,6 +301,8 @@ class Toolbox:
         self.extra: dict[str, tuple[dict[str, Any], ExtraTool]] = dict(extra or {})
         self.actions_held = ""  # 这一轮没放进系统提示的计划和记录写法，装训练类规程时补上（§96）
         self.actions: Desk | None = None  # 动作工具：跟着规程一起装（§120），由单 Agent 那一轮给
+        # 专业工具也跟着规程走（§212）：这一轮装着的规程提到的才给模型；None 是都给（专业角色、旧调用）
+        self.pro_open: set[str] | None = None
         self.flags: frozenset[str] = (
             frozenset()
         )  # 这个人的少见情况：再装基础规程时带上对应的规则（§74）
@@ -295,6 +326,18 @@ class Toolbox:
     def library(self) -> bool:
         return self.spec.role.value in LIBRARY_ROLES
 
+    def pro_named(self, text: str) -> set[str]:
+        """这段规程文字里提到了哪些专业工具（按名字找）。"""
+        return {t.name for t in pro.tools_for(self.spec.role.value) if t.name in text}
+
+    def open_pro(self, names: Collection[str]) -> list[str]:
+        """再开放几个专业工具（中途装规程时）；返回这次新开的。都给的时候（pro_open 是 None）不用开。"""
+        if self.pro_open is None:
+            return []
+        new = sorted(set(names) - self.pro_open)
+        self.pro_open |= set(new)
+        return new
+
     def schemas(self) -> list[dict[str, Any]]:
         out = [KNOWLEDGE_SCHEMA] if self.spec.kb_domains else []
         if self.library:
@@ -308,7 +351,8 @@ class Toolbox:
         if self.medical is not None:
             out.append(MEDICAL_SCHEMA)
         if self.context is not None:
-            out += [t.schema() for t in pro.tools_for(self.spec.role.value)]
+            out += [t.schema() for t in pro.tools_for(self.spec.role.value)
+                    if self.pro_open is None or t.name in self.pro_open]  # fmt: skip
         out += [schema for schema, _ in self.extra.values()]
         if self.actions is not None:
             out += self.actions.schemas()

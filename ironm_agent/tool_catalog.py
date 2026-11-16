@@ -50,6 +50,8 @@ CATALOG: tuple[Tool, ...] = (
          note="按代谢当量 × 体重算有氧每次、每周练多久，估算（§193）"),
     Tool("饮食方案库", "iron-m", "diet_templates", frozenset({"nutrition", "general"}),
          "diet_templates", personal=True, note="目录和单份内容，按热量目标算每顿几份；要换用 propose_diet_plan 出卡片，他确认才换（§184、§190）"),
+    Tool("连锁店菜单库", "iron-m", "chain_menu", frozenset({"nutrition", "general"}),
+         note="查品牌官网的热量和蛋白质、算几样的合计；只读菜单库，不读本人数据（§214）"),
     Tool("疼痛判断", "iron-m", "pain_check", frozenset({"recovery", "general"}), "pain_check",
          personal=True, note="运动场景分流，不做诊断"),
     Tool("指标趋势", "iron-m", "trend_analysis", EXPERTS, "trend_analysis", personal=True),

@@ -44,6 +44,7 @@ class Readiness:
     facts: tuple[str, ...] = ()
     sick: bool = False  # 这句话说生病了（安全护栏：回答里不给大重量、高强度、力竭）
     current: bool = False  # 最近 3 天有睡眠或心率记录
+    averaged: bool = False  # 昨晚（这几天）没有记录，给的是最近 7 天的平均（§208）：回答里要讲明
 
     def line(self) -> str:
         return "今天的身体数据：" + ("；".join(self.facts) if self.facts else "没有")
@@ -110,12 +111,17 @@ def _vs(now: float, mean: float, unit: str, up: str, down: str, *, places: int =
 def readiness(r: Readings, text: str, today: date, *, illness: str = "") -> Readiness:
     """今天的身体数据：最近一晚睡眠、最近 3 天的静息心率与心率变异性，各自和他自己平时（7 天前往回 60 天）比，
     带日期（不是今天的写哪天）。只算事实，不定级、不贴"恢复不够、睡得少"这类标签（§182 需求 7）。
+    昨晚没有睡眠记录、最近 3 天没有静息心率时，给最近 7 天的平均并写明没有记录（§208）；7 天内也没有就只写没有。
     illness：正在进行的生病（事实，§163）；text 只用来认这句话本人说生病了（回答核对的安全护栏）。"""
     facts: list[str] = []
     current = False
+    averaged = False
+    no_sleep = ""  # 最近 7 天都没有睡眠记录：有别的数时单独写一句
     nights = [(d, v) for d, v in sorted(r.sleep_hours) if 0 <= (today - d).days < 3]
+    week = [(d, v) for d, v in sorted(r.sleep_hours) if 0 <= (today - d).days < 7]
     if nights:
         current = True
+    if nights and (today - nights[-1][0]).days <= 1:  # 昨晚（记在今天或昨天）有记录
         d, v = nights[-1]
         line = f"睡眠：最近一晚（{_when(d, today)}）{_f(v)} 小时"
         if len(nights) >= 2:
@@ -124,6 +130,17 @@ def readiness(r: Readings, text: str, today: date, *, illness: str = "") -> Read
         if base:
             line += f"，{_vs(v, base[0], ' 小时', '多', '少')}"
         facts.append(line)
+    elif week:  # 昨晚没有记录：按最近 7 天的平均看，写明是平均、最近一次是哪天（§208）
+        averaged = True
+        avg = statistics.fmean(v for _, v in week)
+        line = (f"睡眠：昨晚没有记录（最近一次是 {_when(week[-1][0], today)}），"
+                f"最近 7 天有 {len(week)} 晚记录，平均 {_f(avg)} 小时")  # fmt: skip
+        base = _baseline(r.sleep_hours, today)
+        if base:
+            line += f"，{_vs(avg, base[0], ' 小时', '多', '少')}"
+        facts.append(line)
+    elif r.sleep_hours:
+        no_sleep = f"睡眠：最近 7 天没有记录（最近一次是 {_when(max(d for d, _ in r.sleep_hours), today)}）"
     for points, name, unit, pct in (
         (r.resting_hr, "静息心率", " 次/分", False),
         (r.hrv_sdnn, "心率变异性（SDNN）", " 毫秒", True),
@@ -131,6 +148,11 @@ def readiness(r: Readings, text: str, today: date, *, illness: str = "") -> Read
     ):
         recent = [(d, v) for d, v in sorted(points) if 0 <= (today - d).days < 3]
         if not recent:
+            days = [(d, v) for d, v in sorted(points) if 0 <= (today - d).days < 7]
+            if name == "静息心率" and days:  # 最近 3 天没有：给最近 7 天的平均，写明没有记录（§208）
+                averaged = True
+                facts.append(f"{name}：最近 3 天没有记录（最近一次是 {_when(days[-1][0], today)}），"
+                             f"最近 7 天有 {len(days)} 天记录，平均 {statistics.fmean(v for _, v in days):.0f}{unit}")  # fmt: skip
             continue
         current = True
         now = statistics.fmean(v for _, v in recent)
@@ -145,7 +167,9 @@ def readiness(r: Readings, text: str, today: date, *, illness: str = "") -> Read
             else "，你平时的记录还不到 14 天，暂不比较"
         )
         facts.append(line)
-    if not current:
+    if no_sleep and current:  # 心率有、睡眠一周没记：单独说一句，不给数
+        facts.insert(0, no_sleep)
+    if not current and not averaged:
         dates = [
             d for pts in (r.sleep_hours, r.resting_hr, r.hrv_sdnn, r.hrv_rmssd) for d, _ in pts
         ]
@@ -157,7 +181,7 @@ def readiness(r: Readings, text: str, today: date, *, illness: str = "") -> Read
         )
     if illness:
         facts.append(f"生病：{illness}")
-    return Readiness(tuple(facts), _said(_SICK, text), current)
+    return Readiness(tuple(facts), _said(_SICK, text), current, averaged)
 
 
 # ---- 风险提示（数据与记忆，§5）--------------------------------------------------------------
@@ -356,7 +380,12 @@ class CaseFile:
         ref = f"〔{self.readiness_id}〕" if self.readiness_id else ""
         lines.append(
             f"- {self.readiness.line()}{ref}（代码只算数、不下结论：今天练不练、按几成，由你看这些数和他说的自己判断；"
-            "只在安排今天的训练或问恢复时用）"
+            "只在安排今天的训练或问恢复时用"
+            + ("；写着没有记录、给的是最近 7 天平均的，可以按这个平均看，但回答里用到时两句都要有、要讲明："
+               "先说昨晚（这几天）没有记录，再说这是最近 7 天的平均（如「昨晚没有睡眠记录，最近 7 天平均 7.3 小时」），"
+               "不说成昨晚睡了多少或今天的数；别的一周平均（静息心率）说的时候也带上「最近 7 天平均」"
+               if self.readiness.averaged else "")
+            + "）"
         )
         if self.insights:  # 读懂指标趋势（§84）：最近和之前比的变化、同期发生的事、已经做的调整（不贴标签，§182）
             lines.append(

@@ -103,24 +103,9 @@ function icon(name, cls = "") {
   return svg;
 }
 
-// IronM 的头像（§175 需求 3）：自己画的黄色胖企鹅——纯黄、浅黄圆肚子、头顶一滴牛奶；不仿现成角色
-let mechSeq = 0;
+// IronM 的头像（§209 需求 3，取代 §175 的小黄鸡）：负责人在 Stitch 做的铁甲人图，整张原样缩小用、不裁剪，圆形深色底
 function mech(size = 34) {
-  ++mechSeq;
-  const svg = s("svg", { viewBox: "0 0 64 64", width: String(size), height: String(size), class: "mech", "aria-hidden": "true" });
-  svg.append(
-    s("path", { d: "M19.5 37 C15.5 41 15.5 46.5 18.5 49.5 C20 50.5 21.8 49.6 21.6 47.6 Z M44.5 37 C48.5 41 48.5 46.5 45.5 49.5 C44 50.5 42.2 49.6 42.4 47.6 Z", fill: "#f4b400", stroke: "#d49600", "stroke-width": ".8" }),
-    s("path", { d: "M32 12 C22.5 12 19.5 19.5 19.5 26.5 C19.5 33.5 12.5 38.5 12.5 47.5 C12.5 57.5 21.5 62.5 32 62.5 C42.5 62.5 51.5 57.5 51.5 47.5 C51.5 38.5 44.5 33.5 44.5 26.5 C44.5 19.5 41.5 12 32 12 Z", fill: "#ffd83d", stroke: "#e0a800", "stroke-width": "1" }),
-    s("ellipse", { cx: "32", cy: "48", rx: "13", ry: "11.5", fill: "#ffefa6" }),
-    s("ellipse", { cx: "26.5", cy: "24.5", rx: "2.2", ry: "2.6", fill: "#2a2420" }),
-    s("ellipse", { cx: "37.5", cy: "24.5", rx: "2.2", ry: "2.6", fill: "#2a2420" }),
-    s("circle", { cx: "27.2", cy: "23.6", r: ".8", fill: "#fff" }),
-    s("circle", { cx: "38.2", cy: "23.6", r: ".8", fill: "#fff" }),
-    s("ellipse", { cx: "23", cy: "29", rx: "2.4", ry: "1.3", fill: "#ffae8a", opacity: ".75" }),
-    s("ellipse", { cx: "41", cy: "29", rx: "2.4", ry: "1.3", fill: "#ffae8a", opacity: ".75" }),
-    s("path", { d: "M29.8 27.6 C31 26.8 33 26.8 34.2 27.6 C33.6 29.2 32.8 29.9 32 29.9 C31.2 29.9 30.4 29.2 29.8 27.6 Z", fill: "#ff9f2e", stroke: "#e07f10", "stroke-width": ".5" }),
-    s("path", { d: "M32 2.5 C30.4 5.8 28.4 7.8 28.4 10.2 C28.4 12.3 30 13.8 32 13.8 C34 13.8 35.6 12.3 35.6 10.2 C35.6 7.8 33.6 5.8 32 2.5 Z", fill: "#fff", stroke: "#cbd5dd", "stroke-width": ".8" }));
-  return svg;
+  return h("img", { src: "/iron/avatar-v1.png", width: String(size), height: String(size), class: "mech", alt: "", "aria-hidden": "true" });
 }
 
 async function api(path, opts = {}) {
@@ -914,7 +899,7 @@ async function quickAdd() {
 const ATLAS_SEGS = [["moves", "动作"], ["machines", "器械"], ["food", "食物"], ["plans", "方案"]];
 // 图鉴去重（§161）：图鉴只放资料；打分、排名、评论都在排行榜（首页最上面"今日热搜"进去）
 const ATLAS_CHIPS = {
-  food: [["", "食材"], ["recipes", "食谱"]],
+  food: [["", "食材"], ["recipes", "食谱"], ["chains", "连锁店"]],  // 连锁店（§203）
   plans: [["", "训练"], ["diet", "饮食"]],  // 饮食方案库（§184）
 };
 function pageSeg(base, segs, cur, label) {
@@ -929,7 +914,7 @@ async function atlas(view, sub, rest) {
       h("a", { class: `pill${k === chip ? " on" : ""}`, href: `#atlas/${cur}${k ? `/${k}` : ""}` }, name))) : null);
   if (cur === "plans") return chip === "diet" ? dietLibAtlas(view) : plansAtlas(view);
   if (cur === "machines") return machinesPage(view);
-  if (cur === "food") return chip === "recipes" ? recipesPage(view) : foodAtlas(view);
+  if (cur === "food") return chip === "recipes" ? recipesPage(view) : chip === "chains" ? chainsPage(view) : foodAtlas(view);
   return moves(view);
 }
 
@@ -2440,9 +2425,11 @@ async function foodAtlas(view) {
     const r = await api(`/iron/api/foods?q=${encodeURIComponent(foodAtlasQ)}`).catch(() => null);
     if (mine !== seq) return;
     if (!r) { list.replaceChildren(h("p", { class: "muted" }, "食物库这次没读到，稍后再试。")); return; }
-    list.replaceChildren(...(r.foods.length ? r.foods.map((f) => h("button", { class: "fa-card", type: "button", onclick: () => f.mine ? myFoodSheet(f) : foodSheet(f) },
+    list.replaceChildren(...(r.foods.length ? r.foods.map((f) => { const one = f.chain?.sizes[f.chain.size];  // 连锁店按一份（§203）
+      return h("button", { class: "fa-card", type: "button", onclick: () => f.mine ? myFoodSheet(f) : one ? chainSheet(f.chain, f.chain.size) : foodSheet(f) },
       foodTile(f.name, f.image, f.cat), h("b", {}, f.name, f.mine ? h("em", { class: "mine-tag" }, "我的") : null),
-      h("span", { class: "num" }, `${f.per100.kcal} 千卡`, h("small", {}, ` · 蛋白质 ${f.per100.protein_g} 克`)), h("small", { class: "muted" }, "每 100 克")))
+      one ? h("span", { class: "num" }, `${one.kcal} 千卡`, h("small", {}, ` · 蛋白质 ${one.protein_g} 克`)) : h("span", { class: "num" }, `${f.per100.kcal} 千卡`, h("small", {}, ` · 蛋白质 ${f.per100.protein_g} 克`)),
+      h("small", { class: "muted" }, one ? "一份" : "每 100 克")); })
       : [h("p", { class: "muted" }, "库里没找到，换个叫法试试。")]));
   };
   input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(go, 200); });
@@ -3163,6 +3150,59 @@ async function recipesPage(view) {
   if (!day) { view.append(notLoaded("食谱", "今天的饮食")); return; }
   view.append(recipesCard(() => day, (d) => { day = d; flash("记下了"); }, true));
 }
+// 连锁店（§203）：品牌官网公开的每份营养，按类列；点开看各份量、记一餐。数值照官网，按一份记
+let chainCat = "";
+async function chainsPage(view) {
+  const r = await api("/iron/api/chains").catch(() => null);
+  if (!r) { view.append(h("p", { class: "muted" }, "连锁店这次没读到，稍后再试。")); return; }
+  for (const b of r.brands) {
+    const cats = b.cats.map((c) => c.name);
+    if (!cats.includes(chainCat)) chainCat = cats[0];
+    const grid = h("div", { class: "chain-list" });
+    const pills = h("div", { class: "hscroll tag-row" });
+    const draw = () => {
+      pills.replaceChildren(...cats.map((c) => h("button", { class: `pill${c === chainCat ? " on" : ""}`, type: "button", "aria-pressed": String(c === chainCat), onclick: () => { chainCat = c; draw(); } }, c)));
+      const items = b.cats.find((c) => c.name === chainCat)?.items || [];
+      grid.replaceChildren(...items.map((x) => { const one = x.sizes[x.default];
+        return h("button", { class: "chain-row", type: "button", onclick: () => chainSheet(x, x.default) },
+          h("span", { class: "cr-name" }, h("b", {}, x.name), x.sizes.length > 1 ? h("small", { class: "muted" }, x.sizes.map((s) => s.size).join(" / ")) : null),
+          h("span", { class: "cr-num" }, h("b", { class: "num" }, String(one.kcal), h("small", {}, " 千卡")), h("small", { class: "muted" }, `蛋白质 ${one.protein_g} 克`))); }));
+    };
+    draw();
+    view.append(h("section", { class: "chain-brand" }, h("div", { class: "section-head" }, h("h2", {}, b.name)),
+      h("p", { class: "caption" }, `官网公开的数据，${b.official_updated}更新`), pills, grid));
+  }
+}
+function chainSheet(x, i0 = 0) {
+  let i = i0, servings = 1;
+  const body = h("div", { class: "sheet-stack" });
+  const draw = () => {
+    const s = x.sizes[i];
+    const k = (v) => Math.round(v * servings * 10) / 10;
+    body.replaceChildren(
+      x.sizes.length > 1 ? h("div", { class: "seg chain-sizes", role: "tablist", style: `grid-template-columns:repeat(${x.sizes.length},minmax(0,1fr))` },
+        x.sizes.map((z, j) => h("button", { type: "button", class: j === i ? "on" : "", "aria-selected": String(j === i), onclick: () => { i = j; draw(); } }, z.size))) : null,
+      h("div", { class: "macro-grid" }, [["热量", s.kcal * servings, "千卡"], ["蛋白质", s.protein_g * servings, "克"], ["碳水", s.carbs_g * servings, "克"], ["脂肪", s.fat_g * servings, "克"]]
+        .map(([n, v, u]) => h("div", {}, h("b", {}, n === "热量" ? Math.round(v) : k(v / servings), h("small", {}, u)), h("span", {}, n)))),
+      h("p", { class: "muted" }, `一份 ${s.g} 克 · 钠 ${k(s.sodium_mg)} 毫克 · 钙 ${k(s.calcium_mg)} 毫克`),
+      h("div", { class: "qa-row" }, h("span", { class: "label" }, "吃了几份"),
+        h("button", { class: "icon-btn", type: "button", "aria-label": "少一份", onclick: () => { servings = Math.max(1, servings - 1); draw(); } }, "−"),
+        h("b", { class: "num" }, String(servings)),
+        h("button", { class: "icon-btn", type: "button", "aria-label": "多一份", onclick: () => { servings = Math.min(5, servings + 1); draw(); } }, "+")),
+      h("p", { class: "caption" }, `${x.brand}官网营养计算器，${x.official_updated}更新`));
+  };
+  draw();
+  (async () => {
+    const day = await api("/iron/api/meals").catch(() => null);
+    if (!day) { openSheet(x.name, body, h("p", { class: "muted" }, "今天的饮食这次没读到，只能看不能记。")); return; }
+    kindSheet(`${x.brand}${x.name}`, day, async (kind) => {
+      const s = x.sizes[i];
+      await api("/iron/api/meals/foods", { method: "POST", body: JSON.stringify({ kind, foods: [{ name: s.food_name, food_id: s.food_id, grams: s.g * servings, oil: "正常" }] }) });
+      flash(`记下了：${s.food_name}${servings > 1 ? ` × ${servings}` : ""}`);
+    }, body);
+  })();
+}
+
 function recipesCard(today, redraw, grid = false) {
   const box = h("div", { class: "recipes" }, h("p", { class: "muted" }, "正在读食谱…"));
   const load = async () => {
@@ -4877,14 +4917,16 @@ function chatPage(view) {
   const fresh = h("button", { class: "icon-btn", type: "button", "aria-label": "新对话", title: "新对话", onclick: () => { resetChat(); chat.loaded = true; drawThread(); input.focus(); } }, icon("plus", "sm"));
   const past = h("button", { class: "icon-btn", type: "button", "aria-label": "以前的对话", title: "以前的对话", onclick: historySheet }, icon("history", "sm"));
   const facts = h("div", { class: "who-facts" });
-  view.append(h("div", { class: "chat" },
+  // 顶上的 IronM 卡片和消息一起滚，往下翻就滚走，不钉在顶上（§209 需求 5）；输入框照旧在底下
+  const scroll = h("div", { class: "chat-scroll" },
     h("div", { class: "chat-bar buddy-card" },
       mech(40),
       h("div", { class: "who" }, h("b", {}, "IronM"), h("span", {}, "陪你练、帮你记"), facts),
       h("div", { class: "chat-tools" }, past, fresh)),
-    thread, files, voiceBar, form));
+    thread);
+  view.append(h("div", { class: "chat" }, scroll, files, voiceBar, form));
   buddyFacts(facts);
-  chat.els = { thread, input, send, files };
+  chat.els = { thread, scroll, input, send, files };
   drawFiles();
   input.addEventListener("input", grow);
   input.addEventListener("keydown", (e) => {
@@ -5012,16 +5054,18 @@ function drawThread() {
   if (coachInbox?.view) thread.append(coachInbox.view);
   if (weekMsg) thread.append(weekMsgView(weekMsg));  // IronM 发上周的周报（§147）
   syncComposer();
-  thread.scrollTop = thread.scrollHeight;
+  // 还没聊过：从顶上卡片和欢迎区开头看起（§209 需求 4、5）；聊过才滚到最新一条
+  const { scroll } = chat.els;
+  scroll.scrollTop = chat.messages.length ? scroll.scrollHeight : 0;
 }
 
 function refresh(msg) {
   if (!chat.els || !msg.el || !msg.el.isConnected) return;
-  const { thread } = chat.els;
-  const near = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 160;
+  const { scroll } = chat.els;
+  const near = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 160;
   const el = msgView(msg);
   msg.el.replaceWith(el); msg.el = el;
-  if (near) thread.scrollTop = thread.scrollHeight;
+  if (near) scroll.scrollTop = scroll.scrollHeight;
 }
 
 function paragraphs(text) {
@@ -5889,7 +5933,7 @@ async function render() {
 window.addEventListener("hashchange", render);
 document.addEventListener("DOMContentLoaded", () => {
   for (const el of document.querySelectorAll(".ti[data-icon]")) el.append(icon(el.dataset.icon));
-  $("logo").append(mech(30)); $("me-avatar").append(icon("user", "sm"));  // 顶栏左边企鹅标志、右边"我"（§175）
+  $("me-avatar").append(icon("user", "sm"));  // 顶栏右边"我"；左边的整套金属标志写在 index.html（§209）
   $("fab").addEventListener("click", quickAdd);
   render();
 });

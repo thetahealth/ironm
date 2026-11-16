@@ -216,6 +216,15 @@ async def _diet_templates(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
     return diet_templates(str(args.get("name") or ""), ctx.kcal_target)
 
 
+async def _chain_menu(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
+    """连锁店菜单库（§214）：查官方数据，几样的合计由系统算。"""
+    from ironm_agent.protools.chain_menu import chain_menu
+
+    raw = args.get("pick")
+    pick = [str(x) for x in raw if str(x).strip()] if isinstance(raw, list) else []
+    return chain_menu(str(args.get("query") or ""), pick)
+
+
 def _sources(refs: Iterable[str]) -> str:
     """资料编号 → "名称（机构 年份）"，追问依据时讲得出来。"""
     from ironm_agent.kb import default_kb
@@ -520,6 +529,22 @@ TOOLS: dict[str, ProTool] = {
             "按他的热量目标算好每顿几份。推荐时说清参考的是哪一份；他要换就用 propose_diet_plan 出卡片，他确认才换（§190）。",
             _obj({"name": {"type": "string", "description": "方案编号或名字，如“地中海”“控糖”；要目录时不填"}}),
             _diet_templates,
+        ),
+        ProTool(
+            "chain_menu",
+            frozenset({"nutrition", "general"}),
+            "连锁店菜单库（现在有麦当劳，数来自品牌官网的营养计算器）：他问在这类连锁店吃什么、点什么、某样多少热量时先调它。"
+            "单品的热量和蛋白质只用它返回的数，不凭印象说；要推荐一顿的搭配时，把选好的几样写进 pick，"
+            "每样的数和合计都由它算，回答里的总数照它给的写、不自己加。库里没有的品牌或餐品，如实说没有官方数据。"
+            "这里只查和算，不替他记；他说已经吃了才用 log_meal 记。",
+            _obj(
+                {
+                    "query": {"type": "string", "description": "餐品名或类别（板烧、汉堡、薯条、饮品）；不写给有哪些品牌和类别"},
+                    "pick": {"type": "array", "items": {"type": "string"},
+                             "description": "选好的几样，写名字，带份量和个数（如 板烧鸡腿堡、中薯条、2 个麦乐鸡）；给了就返回每样的数和合计"},
+                }
+            ),
+            _chain_menu,
         ),
         ProTool(
             "pain_check",

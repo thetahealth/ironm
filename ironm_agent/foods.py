@@ -94,8 +94,17 @@ def foods(path: Path = FOODS_PATH) -> tuple[Food, ...]:
 
 
 @cache
+def all_foods() -> tuple[Food, ...]:
+    """食物库加上连锁店菜单库（§203）：查、记一餐、找名字都用这个；食谱、饮食计划只用 foods()。"""
+    from ironm_agent.chains import food_entries
+
+    base = foods()
+    return (*base, *food_entries(w for f in base for w in (f.name, *f.aka)))
+
+
+@cache
 def by_id() -> dict[str, Food]:
-    return {f.id: f for f in foods()}
+    return {f.id: f for f in all_foods()}
 
 
 _BRACKET = re.compile(r"[（(].*?[)）]")
@@ -106,7 +115,7 @@ def find(name: str) -> Food | None:
     text = name.strip()
     if not text:
         return None
-    exact = {w: f for f in foods() for w in (f.name, *f.aka)}
+    exact = {w: f for f in all_foods() for w in (f.name, *f.aka)}
     if text in exact:
         return exact[text]
     bare = _BRACKET.sub("", text).strip()
@@ -122,5 +131,5 @@ def search(q: str, limit: int = 20) -> list[Food]:
     q = q.strip()
     if not q:
         return []
-    hits = [f for f in foods() if any(q in w for w in (f.name, *f.aka))]
+    hits = [f for f in all_foods() if any(q in w for w in (f.name, *f.aka))]
     return sorted(hits, key=lambda f: (not f.name.startswith(q), len(f.name)))[:limit]

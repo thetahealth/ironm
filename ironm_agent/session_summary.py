@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 from ironm_agent.ddl import run_ddl
@@ -22,6 +22,7 @@ _log = logging.getLogger("ironm_agent.session_summary")
 FIRST = 3  # 用户说了几句之后写第一次
 EVERY = 4  # 之后每多几句更新一次
 SHOW = 2  # 新会话带几个别的会话的摘要
+SHOW_DAYS = 14  # 多少天没更新的摘要不再带（§205）
 MAX_CHARS = 300
 
 _PROMPT = """你替健身教练给刚才这段对话写一份摘要，下次和这个人聊天时用来接上话。只写对话里实际说过的，不推测、不加建议。
@@ -131,6 +132,12 @@ def default_summaries() -> SummaryStore:
     if _default is None:
         _default = PgSummary()
     return _default
+
+
+def fresh(rows: Sequence[Summary], now: datetime | None = None) -> list[Summary]:
+    """新会话带的摘要：只要 14 天内更新过的（§205）；三个月前聊的不拿来"接上话"。"""
+    cut = (now or datetime.now(UTC)) - timedelta(days=SHOW_DAYS)
+    return [s for s in rows if s.updated >= cut]
 
 
 def due(previous: Summary | None, turns: int) -> bool:

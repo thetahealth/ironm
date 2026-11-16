@@ -1,0 +1,96 @@
+# 连锁店菜单库（spec [2026-10-23] §203）：只收品牌官网公开的营养数据，由 scripts/fetch_chain_menus.py 生成，别手改。
+# 每个份量：size 份量名，g 一份多少克（官网数据里的重量），kj 能量（千焦），protein / fat / carbs 克，sodium / calcium 毫克。
+# 千卡 = 千焦 ÷ 4.184（和官网页面一样）。also：开心乐园餐等别的类里也有同一样东西。
+version: "0.1"
+brands:
+  mcdonalds:
+    name: 麦当劳
+    source: "https://www.mcdonalds.com.cn/nutrition_calculator"
+    official_updated: "2025年4月"
+    fetched: "2026-11-09"
+items:
+  - {id: "mcd-49", brand: mcdonalds, name: "巨无霸", cat: "汉堡和卷", sizes: [{size: "1个", g: 220, kj: 2146, protein: 27, fat: 26, carbs: 42, sodium: 961, calcium: 171}]}
+  - {id: "mcd-42", brand: mcdonalds, name: "汉堡包", cat: "汉堡和卷", also: ["开心乐园餐"], sizes: [{size: "1个", g: 104, kj: 1039, protein: 13, fat: 8, carbs: 29, sodium: 492, calcium: 61}]}
+  - {id: "mcd-47", brand: mcdonalds, name: "麦辣鸡腿汉堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 208, kj: 2029, protein: 24, fat: 24, carbs: 42, sodium: 1208, calcium: 154}]}
+  - {id: "mcd-48", brand: mcdonalds, name: "板烧鸡腿堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 192, kj: 1638, protein: 23, fat: 17, carbs: 35, sodium: 1041, calcium: 93}]}
+  - {id: "mcd-45", brand: mcdonalds, name: "麦香鸡", cat: "汉堡和卷", sizes: [{size: "1个", g: 163, kj: 1546, protein: 15, fat: 17, carbs: 39, sodium: 731, calcium: 73}]}
+  - {id: "mcd-46", brand: mcdonalds, name: "麦香鱼", cat: "汉堡和卷", sizes: [{size: "1个", g: 140, kj: 1359, protein: 16, fat: 13, carbs: 35, sodium: 556, calcium: 99}]}
+  - {id: "mcd-43", brand: mcdonalds, name: "吉士汉堡包", cat: "汉堡和卷", sizes: [{size: "1个", g: 118, kj: 1231, protein: 16, fat: 12, carbs: 30, sodium: 673, calcium: 144}]}
+  - {id: "mcd-44", brand: mcdonalds, name: "双层吉士汉堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 168, kj: 1796, protein: 27, fat: 22, carbs: 31, sodium: 1017, calcium: 232}]}
+  - {id: "mcd-145", brand: mcdonalds, name: "不素之霸双层牛堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 177, kj: 2062, protein: 28, fat: 27, carbs: 34, sodium: 1012, calcium: 75}]}
+  - {id: "mcd-146", brand: mcdonalds, name: "双层深海鳕鱼堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 209, kj: 2029, protein: 28, fat: 21, carbs: 46, sodium: 917, calcium: 147}]}
+  - {id: "mcd-161", brand: mcdonalds, name: "培根安格斯厚牛堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 216, kj: 2959, protein: 34, fat: 44, carbs: 43, sodium: 1037, calcium: 161}]}
+  - {id: "mcd-162", brand: mcdonalds, name: "芝士安格斯厚牛堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 218, kj: 2914, protein: 32, fat: 44, carbs: 43, sodium: 897, calcium: 150}]}
+  - {id: "mcd-50", brand: mcdonalds, name: "培根蔬萃双层牛堡", cat: "汉堡和卷", sizes: [{size: "1个", g: 184, kj: 1850, protein: 24, fat: 23, carbs: 34, sodium: 728, calcium: 73}]}
+  - {id: "mcd-51", brand: mcdonalds, name: "可口可乐", cat: "饮品", sizes: [{size: "小", g: 326, kj: 446, protein: 0, fat: 0, carbs: 26, sodium: 0, calcium: 7}, {size: "中", g: 443, kj: 616, protein: 0, fat: 0, carbs: 36, sodium: 0, calcium: 10}, {size: "大", g: 642, kj: 936, protein: 0, fat: 0, carbs: 55, sodium: 0, calcium: 15}]}
+  - {id: "mcd-53", brand: mcdonalds, name: "无糖可口可乐", cat: "饮品", sizes: [{size: "小", g: 326, kj: 0, protein: 0, fat: 0, carbs: 0, sodium: 25, calcium: 0}, {size: "中", g: 443, kj: 0, protein: 0, fat: 0, carbs: 1, sodium: 35, calcium: 0}, {size: "大", g: 642, kj: 0, protein: 0, fat: 0, carbs: 1, sodium: 53, calcium: 0}]}
+  - {id: "mcd-102", brand: mcdonalds, name: "阳光柠檬红茶", cat: "饮品", sizes: [{size: "小", g: 249, kj: 354, protein: 0, fat: 0, carbs: 21, sodium: 12, calcium: 0}, {size: "中", g: 244, kj: 488, protein: 0, fat: 0, carbs: 29, sodium: 17, calcium: 0}, {size: "大", g: 523, kj: 743, protein: 0, fat: 0, carbs: 43, sodium: 25, calcium: 0}]}
+  - {id: "mcd-52", brand: mcdonalds, name: "雪碧", cat: "饮品", sizes: [{size: "小", g: 326, kj: 319, protein: 0, fat: 0, carbs: 19, sodium: 21, calcium: 0}, {size: "中", g: 443, kj: 440, protein: 0, fat: 0, carbs: 26, sodium: 29, calcium: 0}, {size: "大", g: 642, kj: 669, protein: 0, fat: 0, carbs: 39, sodium: 45, calcium: 0}]}
+  - {id: "mcd-344", brand: mcdonalds, name: "怡泉+C", cat: "饮品", sizes: [{size: "中", g: 443, kj: 461, protein: 0, fat: 0, carbs: 27, sodium: 0, calcium: 0}, {size: "大", g: 642, kj: 701, protein: 0, fat: 0, carbs: 41, sodium: 0, calcium: 0}]}
+  - {id: "mcd-66", brand: mcdonalds, name: "阳光橙麦炫酷", cat: "饮品", sizes: [{size: "默认", g: 486, kj: 955, protein: 1, fat: 2, carbs: 50, sodium: 77, calcium: 52}]}
+  - {id: "mcd-248", brand: mcdonalds, name: "【美汁源】“黄金橙橙”", cat: "饮品", sizes: [{size: "中", g: 443, kj: 691, protein: 0, fat: 0, carbs: 41, sodium: 53, calcium: 0}]}
+  - {id: "mcd-111", brand: mcdonalds, name: "100%苹果汁", cat: "饮品", also: ["开心乐园餐"], sizes: [{size: "1盒", g: 200, kj: 368, protein: 0, fat: 0, carbs: 21, sodium: 0, calcium: 0}]}
+  - {id: "mcd-62", brand: mcdonalds, name: "优品豆浆", cat: "饮品", also: ["早餐"], sizes: [{size: "小", g: 218, kj: 633, protein: 6, fat: 3, carbs: 25, sodium: 32, calcium: 15}, {size: "大", g: 291, kj: 844, protein: 8, fat: 4, carbs: 33, sodium: 43, calcium: 21}]}
+  - {id: "mcd-61", brand: mcdonalds, name: "纯牛奶（盒装）", cat: "饮品", also: ["开心乐园餐"], sizes: [{size: "默认", g: 200, kj: 541, protein: 7, fat: 7, carbs: 10, sodium: 73, calcium: 231}]}
+  - {id: "mcd-57", brand: mcdonalds, name: "锡兰红茶", cat: "饮品", sizes: [{size: "默认", g: 274, kj: 8, protein: 0, fat: 0, carbs: 0, sodium: 0, calcium: 5}]}
+  - {id: "mcd-63", brand: mcdonalds, name: "纯悦", cat: "饮品", also: ["开心乐园餐"], sizes: [{size: "默认", g: 550, kj: 0, protein: 0, fat: 0, carbs: 0, sodium: 0, calcium: 0}]}
+  - {id: "mcd-21", brand: mcdonalds, name: "薯条", cat: "小食", also: ["开心乐园餐"], sizes: [{size: "迷你", g: 40, kj: 444, protein: 2, fat: 4, carbs: 14, sodium: 61, calcium: 6}, {size: "小", g: 79, kj: 877, protein: 3, fat: 9, carbs: 28, sodium: 120, calcium: 13}, {size: "中", g: 109, kj: 1210, protein: 4, fat: 12, carbs: 38, sodium: 165, calcium: 18}, {size: "大", g: 143, kj: 1587, protein: 6, fat: 16, carbs: 50, sodium: 216, calcium: 23}]}
+  - {id: "mcd-326", brand: mcdonalds, name: "脆脆薯条", cat: "小食", sizes: [{size: "中", g: 103, kj: 1168, protein: 4, fat: 14, carbs: 32, sodium: 540, calcium: 13}]}
+  - {id: "mcd-26", brand: mcdonalds, name: "麦辣鸡翅", cat: "小食", sizes: [{size: "2块", g: 73, kj: 937, protein: 13, fat: 15, carbs: 9, sodium: 537, calcium: 13}]}
+  - {id: "mcd-329", brand: mcdonalds, name: "薄皮焦香V翅", cat: "小食", sizes: [{size: "2块", g: 85, kj: 804, protein: 17, fat: 11, carbs: 6, sodium: 594, calcium: 15}]}
+  - {id: "mcd-23", brand: mcdonalds, name: "麦乐鸡（5块）", cat: "小食", sizes: [{size: "5块", g: 82, kj: 890, protein: 12, fat: 12, carbs: 13, sodium: 422, calcium: 9}]}
+  - {id: "mcd-101", brand: mcdonalds, name: "那么大鸡排（椒盐风味）", cat: "小食", sizes: [{size: "1个", g: 154, kj: 1612, protein: 24, fat: 21, carbs: 24, sodium: 996, calcium: 13}]}
+  - {id: "mcd-24", brand: mcdonalds, name: "玉米杯", cat: "小食", also: ["开心乐园餐"], sizes: [{size: "小", g: 72, kj: 223, protein: 2, fat: 1, carbs: 7, sodium: 1, calcium: 6}, {size: "大", g: 118, kj: 365, protein: 4, fat: 1, carbs: 12, sodium: 2, calcium: 10}]}
+  - {id: "mcd-136", brand: mcdonalds, name: "苹果片", cat: "小食", also: ["开心乐园餐"], sizes: [{size: "默认", g: 66, kj: 133, protein: 0, fat: 0, carbs: 7, sodium: 0, calcium: 18}]}
+  - {id: "mcd-22", brand: mcdonalds, name: "圆筒冰淇淋", cat: "甜品", sizes: [{size: "1个", g: 63, kj: 391, protein: 2, fat: 3, carbs: 14, sodium: 36, calcium: 77}]}
+  - {id: "mcd-34", brand: mcdonalds, name: "奥利奥麦旋风", cat: "甜品", sizes: [{size: "1个", g: 159, kj: 1115, protein: 5, fat: 9, carbs: 40, sodium: 116, calcium: 185}]}
+  - {id: "mcd-35", brand: mcdonalds, name: "草莓麦旋风", cat: "甜品", sizes: [{size: "1个", g: 173, kj: 1234, protein: 6, fat: 9, carbs: 47, sodium: 122, calcium: 186}]}
+  - {id: "mcd-32", brand: mcdonalds, name: "朱古力新地", cat: "甜品", sizes: [{size: "1个", g: 156, kj: 1178, protein: 5, fat: 9, carbs: 44, sodium: 126, calcium: 182}]}
+  - {id: "mcd-33", brand: mcdonalds, name: "草莓新地", cat: "甜品", sizes: [{size: "1个", g: 156, kj: 1027, protein: 4, fat: 6, carbs: 43, sodium: 84, calcium: 158}]}
+  - {id: "mcd-340", brand: mcdonalds, name: "迷你朱古力新地", cat: "甜品", sizes: [{size: "1份", g: 78, kj: 586, protein: 3, fat: 4, carbs: 22, sodium: 63, calcium: 90}]}
+  - {id: "mcd-341", brand: mcdonalds, name: "迷你草莓新地", cat: "甜品", sizes: [{size: "1份", g: 78, kj: 511, protein: 2, fat: 3, carbs: 21, sodium: 42, calcium: 78}]}
+  - {id: "mcd-36", brand: mcdonalds, name: "香芋派", cat: "甜品", sizes: [{size: "1个", g: 84, kj: 971, protein: 2, fat: 12, carbs: 28, sodium: 159, calcium: 7}]}
+  - {id: "mcd-37", brand: mcdonalds, name: "菠萝派", cat: "甜品", sizes: [{size: "1个", g: 84, kj: 925, protein: 2, fat: 11, carbs: 27, sodium: 147, calcium: 5}]}
+  - {id: "mcd-15", brand: mcdonalds, name: "猪柳麦满分", cat: "早餐", sizes: [{size: "1个", g: 107, kj: 1288, protein: 16, fat: 16, carbs: 24, sodium: 781, calcium: 213}]}
+  - {id: "mcd-17", brand: mcdonalds, name: "猪柳蛋麦满分", cat: "早餐", sizes: [{size: "1个", g: 155, kj: 1618, protein: 23, fat: 21, carbs: 25, sodium: 846, calcium: 243}]}
+  - {id: "mcd-321", brand: mcdonalds, name: "双层猪柳蛋麦满分", cat: "早餐", sizes: [{size: "1个", g: 193, kj: 2148, protein: 29, fat: 32, carbs: 26, sodium: 1210, calcium: 249}]}
+  - {id: "mcd-20", brand: mcdonalds, name: "火腿扒麦满分", cat: "早餐", sizes: [{size: "1个", g: 116, kj: 1092, protein: 14, fat: 12, carbs: 24, sodium: 608, calcium: 131}]}
+  - {id: "mcd-39", brand: mcdonalds, name: "大脆鸡扒麦满分", cat: "早餐", sizes: [{size: "1个", g: 136, kj: 1510, protein: 16, fat: 17, carbs: 35, sodium: 804, calcium: 130}]}
+  - {id: "mcd-40", brand: mcdonalds, name: "原味板烧鸡腿麦满分", cat: "早餐", sizes: [{size: "默认", g: 121, kj: 1029, protein: 15, fat: 9, carbs: 25, sodium: 611, calcium: 133}]}
+  - {id: "mcd-41", brand: mcdonalds, name: "双层原味板烧鸡腿麦满分", cat: "早餐", sizes: [{size: "1个", g: 172, kj: 1486, protein: 23, fat: 17, carbs: 27, sodium: 984, calcium: 138}]}
+  - {id: "mcd-320", brand: mcdonalds, name: "原味板烧鸡腿炒双蛋堡", cat: "早餐", sizes: [{size: "1个", g: 201, kj: 1754, protein: 27, fat: 21, carbs: 30, sodium: 715, calcium: 116}]}
+  - {id: "mcd-172", brand: mcdonalds, name: "猪柳炒双蛋堡", cat: "早餐", sizes: [{size: "1个", g: 188, kj: 1827, protein: 25, fat: 24, carbs: 29, sodium: 705, calcium: 116}]}
+  - {id: "mcd-209", brand: mcdonalds, name: "火腿扒早安营养卷", cat: "早餐", sizes: [{size: "1个", g: 184, kj: 1857, protein: 16, fat: 24, carbs: 39, sodium: 1065, calcium: 108}]}
+  - {id: "mcd-221", brand: mcdonalds, name: "图林根香肠早安营养卷", cat: "早餐", sizes: [{size: "1个", g: 174, kj: 1779, protein: 14, fat: 23, carbs: 38, sodium: 977, calcium: 68}]}
+  - {id: "mcd-168", brand: mcdonalds, name: "皮蛋鸡肉粥", cat: "早餐", sizes: [{size: "1份", g: 72, kj: 558, protein: 6, fat: 3, carbs: 20, sodium: 611, calcium: 20}]}
+  - {id: "mcd-169", brand: mcdonalds, name: "雪菜脆笋鸡肉粥", cat: "早餐", sizes: [{size: "1份", g: 62, kj: 504, protein: 4, fat: 2, carbs: 22, sodium: 552, calcium: 14}]}
+  - {id: "mcd-107", brand: mcdonalds, name: "脆薯饼", cat: "早餐", sizes: [{size: "1个", g: 54, kj: 612, protein: 1, fat: 9, carbs: 14, sodium: 311, calcium: 7}]}
+  - {id: "mcd-108", brand: mcdonalds, name: "脆香油条", cat: "早餐", sizes: [{size: "1个", g: 49, kj: 844, protein: 5, fat: 12, carbs: 19, sodium: 230, calcium: 18}]}
+  - {id: "mcd-220", brand: mcdonalds, name: "德式图林根香肠", cat: "早餐", sizes: [{size: "1个", g: 40, kj: 366, protein: 5, fat: 6, carbs: 2, sodium: 293, calcium: 5}]}
+  - {id: "mcd-335", brand: mcdonalds, name: "“苹板”支撑Pro", cat: "500大卡套餐", sizes: [{size: "1份", g: 773, kj: 1993, protein: 25, fat: 18, carbs: 50, sodium: 1077, calcium: 117}]}
+  - {id: "mcd-338", brand: mcdonalds, name: "牛气满满", cat: "500大卡套餐", sizes: [{size: "1份", g: 699, kj: 2073, protein: 26, fat: 24, carbs: 42, sodium: 764, calcium: 79}]}
+  - {id: "mcd-154", brand: mcdonalds, name: "儿童鱼排堡", cat: "开心乐园餐", sizes: [{size: "1个", g: 140, kj: 1126, protein: 15, fat: 6, carbs: 36, sodium: 442, calcium: 58}]}
+  - {id: "mcd-121", brand: mcdonalds, name: "麦乐鸡（4块）", cat: "开心乐园餐", sizes: [{size: "4块", g: 68, kj: 712, protein: 10, fat: 10, carbs: 11, sodium: 337, calcium: 7}]}
+  - {id: "mcd-287", brand: mcdonalds, name: "冰奶铁", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 215, kj: 358, protein: 5, fat: 4, carbs: 8, sodium: 44, calcium: 144}, {size: "中", g: 340, kj: 618, protein: 8, fat: 7, carbs: 13, sodium: 77, calcium: 251}, {size: "大", g: 380, kj: 678, protein: 9, fat: 7, carbs: 15, sodium: 85, calcium: 275}]}
+  - {id: "mcd-288", brand: mcdonalds, name: "热奶铁", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 215, kj: 559, protein: 8, fat: 6, carbs: 12, sodium: 72, calcium: 231}, {size: "中", g: 300, kj: 779, protein: 11, fat: 8, carbs: 17, sodium: 99, calcium: 320}, {size: "大", g: 415, kj: 1040, protein: 14, fat: 11, carbs: 22, sodium: 134, calcium: 431}]}
+  - {id: "mcd-289", brand: mcdonalds, name: "冰燕麦奶铁", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 215, kj: 322, protein: 2, fat: 3, carbs: 10, sodium: 50, calcium: 155}, {size: "中", g: 340, kj: 554, protein: 3, fat: 5, carbs: 17, sodium: 87, calcium: 270}, {size: "大", g: 380, kj: 608, protein: 4, fat: 5, carbs: 19, sodium: 96, calcium: 296}]}
+  - {id: "mcd-290", brand: mcdonalds, name: "热燕麦奶铁", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 215, kj: 500, protein: 3, fat: 5, carbs: 16, sodium: 81, calcium: 248}, {size: "中", g: 300, kj: 697, protein: 4, fat: 6, carbs: 22, sodium: 112, calcium: 345}, {size: "大", g: 415, kj: 929, protein: 5, fat: 8, carbs: 29, sodium: 152, calcium: 464}]}
+  - {id: "mcd-293", brand: mcdonalds, name: "冰美式", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 240, kj: 41, protein: 1, fat: 0, carbs: 1, sodium: 0, calcium: 6}, {size: "中", g: 330, kj: 54, protein: 1, fat: 0, carbs: 2, sodium: 0, calcium: 7}, {size: "大", g: 450, kj: 60, protein: 1, fat: 0, carbs: 2, sodium: 0, calcium: 8}]}
+  - {id: "mcd-294", brand: mcdonalds, name: "热美式", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 240, kj: 41, protein: 1, fat: 0, carbs: 1, sodium: 0, calcium: 6}, {size: "中", g: 330, kj: 54, protein: 1, fat: 0, carbs: 2, sodium: 0, calcium: 7}, {size: "大", g: 450, kj: 60, protein: 1, fat: 0, carbs: 2, sodium: 0, calcium: 8}]}
+  - {id: "mcd-295", brand: mcdonalds, name: "冰焦糖玛奇朵", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 315, kj: 618, protein: 8, fat: 7, carbs: 13, sodium: 77, calcium: 251}]}
+  - {id: "mcd-298", brand: mcdonalds, name: "热焦糖玛奇朵", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 270, kj: 698, protein: 9, fat: 7, carbs: 15, sodium: 88, calcium: 284.7}]}
+  - {id: "mcd-299", brand: mcdonalds, name: "卡布奇诺", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 270, kj: 698, protein: 9, fat: 7, carbs: 15, sodium: 88, calcium: 285}, {size: "大", g: 375, kj: 932, protein: 13, fat: 10, carbs: 20, sodium: 120, calcium: 385}]}
+  - {id: "mcd-303", brand: mcdonalds, name: "冰浓浓燕麦黑巧", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 285, kj: 500, protein: 2, fat: 5, carbs: 16, sodium: 87, calcium: 263}, {size: "大", g: 306, kj: 547, protein: 3, fat: 5, carbs: 17, sodium: 95, calcium: 388}]}
+  - {id: "mcd-314", brand: mcdonalds, name: "热浓浓燕麦黑巧", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 275, kj: 655, protein: 3, fat: 6, carbs: 21, sodium: 114, calcium: 344}, {size: "大", g: 375, kj: 893, protein: 4, fat: 8, carbs: 28, sodium: 156, calcium: 469}]}
+  - {id: "mcd-306", brand: mcdonalds, name: "冰浓浓抹茶牛奶", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 311, kj: 821, protein: 8, fat: 6, carbs: 25, sodium: 80, calcium: 275}, {size: "大", g: 344, kj: 1004, protein: 9, fat: 7, carbs: 33, sodium: 89, calcium: 314}]}
+  - {id: "mcd-307", brand: mcdonalds, name: "热浓浓抹茶牛奶", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 301, kj: 996, protein: 11, fat: 8, carbs: 29, sodium: 104, calcium: 351}, {size: "大", g: 414, kj: 1393, protein: 14, fat: 12, carbs: 41, sodium: 142, calcium: 482}]}
+  - {id: "mcd-304", brand: mcdonalds, name: "冰燕麦奶", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 230, kj: 547, protein: 3, fat: 5, carbs: 17, sodium: 95, calcium: 288}, {size: "中", g: 350, kj: 833, protein: 4, fat: 8, carbs: 26, sodium: 145, calcium: 438}, {size: "大", g: 420, kj: 1000, protein: 5, fat: 9, carbs: 32, sodium: 174, calcium: 525}]}
+  - {id: "mcd-305", brand: mcdonalds, name: "热燕麦奶", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 230, kj: 547, protein: 3, fat: 5, carbs: 17, sodium: 95, calcium: 288}, {size: "中", g: 275, kj: 655, protein: 3, fat: 6, carbs: 21, sodium: 114, calcium: 344}, {size: "大", g: 375, kj: 893, protein: 4, fat: 8, carbs: 28, sodium: 156, calcium: 469}]}
+  - {id: "mcd-308", brand: mcdonalds, name: "冰浓浓黑巧", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 285, kj: 563, protein: 8, fat: 6, carbs: 12, sodium: 77, calcium: 244}, {size: "大", g: 305, kj: 617, protein: 8, fat: 7, carbs: 13, sodium: 84, calcium: 267}]}
+  - {id: "mcd-309", brand: mcdonalds, name: "热浓浓黑巧", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 275, kj: 738, protein: 10, fat: 8, carbs: 15, sodium: 101, calcium: 319}, {size: "大", g: 375, kj: 1006, protein: 13, fat: 11, carbs: 21, sodium: 137, calcium: 435}]}
+  - {id: "mcd-277", brand: mcdonalds, name: "冰牛奶", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 230, kj: 617, protein: 8, fat: 7, carbs: 13, sodium: 84, calcium: 267}, {size: "中", g: 350, kj: 939, protein: 13, fat: 11, carbs: 19, sodium: 128, calcium: 406}, {size: "大", g: 420, kj: 1127, protein: 15, fat: 13, carbs: 23, sodium: 154, calcium: 487}]}
+  - {id: "mcd-276", brand: mcdonalds, name: "热牛奶", cat: "McCafé 饮品及其他", sizes: [{size: "小", g: 230, kj: 617, protein: 8, fat: 7, carbs: 13, sodium: 84, calcium: 267}, {size: "中", g: 275, kj: 738, protein: 10, fat: 8, carbs: 15, sodium: 101, calcium: 319}, {size: "大", g: 375, kj: 1006, protein: 13, fat: 11, carbs: 21, sodium: 137, calcium: 435}]}
+  - {id: "mcd-271", brand: mcdonalds, name: "浓浓抹茶雪冰", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 276, kj: 1208, protein: 7, fat: 11, carbs: 39, sodium: 181, calcium: 220}, {size: "大", g: 319, kj: 1418, protein: 8, fat: 12, carbs: 48, sodium: 194, calcium: 270}]}
+  - {id: "mcd-269", brand: mcdonalds, name: "浓浓黑巧雪冰", cat: "McCafé 饮品及其他", sizes: [{size: "中", g: 290, kj: 1501, protein: 8, fat: 12, carbs: 51, sodium: 224, calcium: 207}, {size: "大", g: 340, kj: 1857, protein: 11, fat: 14, carbs: 65, sodium: 258, calcium: 251}]}
+  - {id: "mcd-312", brand: mcdonalds, name: "抹茶阿芙佳朵", cat: "McCafé 饮品及其他", sizes: [{size: "一杯", g: 92, kj: 613, protein: 3, fat: 4, carbs: 23, sodium: 50, calcium: 136}]}
+  - {id: "mcd-313", brand: mcdonalds, name: "咖啡阿芙佳朵", cat: "McCafé 饮品及其他", sizes: [{size: "一杯", g: 116, kj: 583, protein: 4, fat: 4, carbs: 21, sodium: 49, calcium: 111}]}

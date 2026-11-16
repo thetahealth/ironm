@@ -269,6 +269,9 @@ REMEMBER_SCHEMA: dict[str, Any] = {
                             "lasting": {"type": "string", "enum": ["long", "short"],
                                         "description": "long（一直要照顾）或 short（某一天、这几天）"},
                             "until": {"type": "string", "description": "event、followup 的截止日 YYYY-MM-DD"},
+                            "topic": {"type": "string",
+                                      "description": "preference、diet、style：说的是哪样东西，一个词（跑步、牛肉），要是他话里有的；"
+                                                     "同一样东西有了新说法就 update 原来那条"},
                             "parts": {"type": "array", "items": {"type": "string", "enum": _JOINTS},
                                       "description": "injury：哪个关节（肩、手肘、手腕、颈椎、腰椎、髋、膝、踝），要是他说到的"},
                             "side": {"type": "string", "enum": ["左", "右", "两侧"],

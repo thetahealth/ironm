@@ -88,7 +88,10 @@ from ironm_agent.kb import KnowledgeBase, default_kb
 from ironm_agent.llm import ModelsConfig, ModelUnavailable, TurnLLM, load_models
 from ironm_agent.memory import (
     COACH,
+    READ_CHAT,
+    READ_CHAT_SCHEMA,
     USER,
+    chat_tool,
     earlier,
     last_sources,
     recent,
@@ -99,6 +102,7 @@ from ironm_agent.memory import (
 from ironm_agent.memory_extract import (
     changes_of,
     extract,
+    held_line,
     validate,
 )
 from ironm_agent.memory_layers import (
@@ -109,8 +113,8 @@ from ironm_agent.memory_layers import (
 )
 from ironm_agent.memory_prefs import due as prefs_due
 from ironm_agent.memory_prefs import refresh as refresh_prefs
-from ironm_agent.memory_store import Item, MemoryStore, default_store
-from ironm_agent.memory_view import Recall
+from ironm_agent.memory_store import Item, MemoryStore, StaleMemory, default_store
+from ironm_agent.memory_view import Recall, for_extract
 from ironm_agent.metrics import GOALS
 from ironm_agent.personal import Personal, personal_basics
 from ironm_agent.plan_ops import (
@@ -159,7 +163,14 @@ from ironm_agent.safety.replies import (
     load_replies,
     refusal_sections,
 )
-from ironm_agent.session_summary import SHOW, Summary, SummaryStore, default_summaries, summarize
+from ironm_agent.session_summary import (
+    SHOW,
+    Summary,
+    SummaryStore,
+    default_summaries,
+    fresh,
+    summarize,
+)
 from ironm_agent.session_summary import due as summary_due
 from ironm_agent.skill_route import route as route_skills
 from ironm_agent.skills import pick_any, pick_routed
@@ -514,6 +525,7 @@ class IronMAgent:
         self._diet: Any = None
         self._kitchen: Any = None  # 自建食谱和饮食计划（§190）；测试里换成内存版
         self._coach_cache: dict[str, tuple[date, Any]] = {}  # 同一轮只读一次管家方案（§97）
+        self._memory_cache: dict[str, list[Item]] = {}  # 同一轮只读一次记忆（§206）
         self._web_search: Any = None  # 联网搜索（§91）；None 时按环境变量里的密钥配，测试里换成假的
         self._web_log: Any = None  # 联网查询的待审清单；None 用数据库里的
         self._goals = goals  # 目标体重和日期（排新计划前追问时带上，spec [2026-10-23] §55）
@@ -698,12 +710,18 @@ class IronMAgent:
         return self._summaries
 
     async def _memory_items(self, user_id: str) -> list[Item]:
-        """这个人的记忆（含被取代、已结束的，归档了的不取，§157），四层记忆用；读不到时当作没有。"""
+        """这个人的记忆（含被取代、已结束的，归档了的不取，§157）；读不到时当作没有。
+        一轮只读一次（§206）：档案、工具和四层记忆用同一份，每轮开始时清掉。"""
+        cached = self._memory_cache.get(user_id)
+        if cached is not None:
+            return list(cached)
         try:
-            return await self._memory_store().items(user_id, current_only=False, recent=date.today())
+            rows = await self._memory_store().items(user_id, current_only=False, recent=date.today())
         except Exception as e:
             _log.warning("memory unavailable: error_type=%s", type(e).__name__)
-            return []
+            rows = []
+        self._memory_cache[user_id] = rows
+        return list(rows)
 
     async def _summarize(self, user_id: str, session_id: str, turns: int) -> None:
         """会话摘要（§73 需求 4、6）：3 句以上写第一次，之后每多 4 句更新；答应的事记成待跟进。日志只记条数。"""
@@ -1158,39 +1176,82 @@ class IronMAgent:
         return ""
 
     async def _recall(self, user_id: str) -> Recall:
-        """作答前读这个人的全部有效记忆；读不到时当作没有记忆，不影响作答。"""
-        try:
-            return Recall.of(await self._memory_store().items(user_id))
-        except Exception as e:
-            _log.warning("memory unavailable: error_type=%s", type(e).__name__)
-            return Recall()
+        """作答前读这个人的有效记忆；读不到时当作没有记忆，不影响作答。
+        和四层记忆用同一次读出来的（§206），所以归档了的也不在里面（§157）。"""
+        rows = await self._memory_items(user_id)
+        return Recall.of([x for x in rows if x.status != "superseded"])
 
     async def _remember(
-        self, user_id: str, text: str, answer: str, context: list[str], held: Sequence[str] = ()
+        self,
+        user_id: str,
+        text: str,
+        answer: str,
+        context: list[str],
+        held: Sequence[str] = (),
+        state: Sequence[str] | None = None,
+        run: dict[str, Any] | None = None,
     ) -> None:
-        """回答发出后提取这一轮的记忆；暂停记忆时不提取。日志只记条数和耗时，不记内容。"""
+        """回答发出后提取这一轮的记忆；暂停记忆时不提取。日志只记条数和耗时，不记内容。
+        模型不可用、给的不是规定格式时，这句话留着，下一次整理时一起交给模型（§204）。
+        state 给了（空列表也算）：同一次调用里把他说的今天的状态也读出来，照 §163 写（§207）。"""
         start = time.perf_counter()
         store = self._memory_store()
+        waiting: list[Any] = []
+        out: Any = None
         try:
             async with self._locks.setdefault(user_id, asyncio.Lock()):
                 if await store.paused(user_id):
                     return
-                items = await store.items(user_id)
+                today = date.today()
+                # 只给还在用的（§205）：归档的不取，同一件事更早的、早就结束的近况、过期的建议不给
+                items = for_extract(await store.items(user_id, recent=today), today)
                 if (llm := await self._quiet_llm(user_id)) is None:  # 用他自己的模型，没填不提取（§167）
                     return
-                out = await extract(llm, items, text, answer, context, held)
-                await store.apply(user_id, out.changes)  # 生病记录不再从记忆里补记（§163）
+                mine = held_line(text, today)
+                await store.hold(user_id, mine)  # 先留再整理（§207）：中途断了、重启了，下次照样补记
+                kept = await store.held(user_id)
+                waiting = [h for h in kept if h.text != mine]  # 前面没记下、留着的话
+                out = await extract(llm, items, text, answer, context,
+                                    [*held, *(h.text for h in waiting)], state)  # fmt: skip
+                if not out.failed:  # 失败的话这句已经留着了（§204）
+                    try:
+                        await store.apply(user_id, out.changes)  # 生病记录不再从记忆里补记（§163）
+                    except StaleMemory:  # 要改的那条刚被别处改掉：这一轮不写，话留着下次按最新的整理
+                        raise
+                    except Exception:  # 模型整理过一遍了：写不进去也不再反复补，免得一条坏的卡住后面每一轮
+                        await store.release(user_id, [h.id for h in kept])
+                        raise
+                    await store.release(user_id, [h.id for h in kept])
         except Exception as e:  # 提取失败不影响已经发出的回答
             _log.warning("memory extraction failed: error_type=%s", type(e).__name__)
             return
+        finally:
+            if out is not None and out.state:  # 同一次调用读出来的今天的状态：记忆写没写成都照写（§207）
+                try:
+                    await self._apply_said(user_id, out.state, run if run is not None else {})
+                except Exception as e:
+                    _log.warning("state write failed: error_type=%s", type(e).__name__)
         stats = {
             "inserted": sum(1 for c in out.changes if c.kind == "insert"),
             "superseded": sum(1 for c in out.changes if c.kind == "status"),
             "rejected": len(out.rejected),
             "failed": bool(out.failed),
+            "held": len(waiting),  # 这一轮一起交给模型的、之前留着的话
+            "state": len(out.state),  # 一起读出来的状态有几项（§207）
             "ms": int((time.perf_counter() - start) * 1000),
         }
         _log.info("ironm memory %s", json.dumps(stats))
+
+    async def _after_answer(self, user_id: str, text: str, run: dict[str, Any], said: Mapping[str, Any]) -> None:
+        """回答后既要记今天的状态、又要整理记忆（§114、§166）：合成一次模型调用（§207）。
+        他暂停了记忆就只读状态（记忆不整理、不留话）。"""
+        history = list(said.get("history") or [])
+        if await self._paused(user_id):
+            await self._settle_state(user_id, text, run, history)
+            return
+        ill = illness_line(run.get("_ill") or [], date.today(), within=14)
+        await self._remember(user_id, text, str(said["answer"]), self._memory_context(history),
+                             state=[f"他最近{ill}"] if ill else [], run=run)  # fmt: skip
 
     async def _remember_now(
         self,
@@ -1373,15 +1434,18 @@ class IronMAgent:
             async for block in self._turn(user_id, session_id, text, llm, run, said, file_list):
                 yield block
             run["state_by"] = "model" if run.get("_judged_state") else "keyword"
-            self._later(user_id, self._settle_state(user_id, text, run, said.get("history") or []))  # §114、§166
+            # 回答后记状态、整理记忆（§114、§166）：不先用关键词判断（§68）；两样都要时只调一次模型（§207）
+            extracting = "answer" in said and self._remember_on and not said.get("remembered")
+            history = said.get("history") or []
+            if extracting and self._record_after and run["state_by"] == "model":
+                self._later(user_id, self._after_answer(user_id, text, run, said))
+            else:  # 只要一样：照旧各调各的
+                self._later(user_id, self._settle_state(user_id, text, run, history))
+                if extracting:
+                    self._later(user_id, self._remember(user_id, text, said["answer"], self._memory_context(history)))
             if "answer" in said and self._remember_on:
                 if said.get("remembered"):  # 单 Agent 这一轮已经当场记了（§68）
                     run["memory_extract"] = "agent"
-                else:  # 不先用关键词判断，后台兜底提取一次（§68）
-                    self._later(
-                        user_id,
-                        self._remember(user_id, text, said["answer"], self._memory_context(said["history"])),
-                    )
                 # 每天第一次提问时管家评估一次（今天评估过就不再算）
                 self._later(user_id, self._coach(user_id, "每天第一次提问", False))
                 # 会话摘要（§73）：到了该写的时候才调模型
@@ -1395,6 +1459,7 @@ class IronMAgent:
             done = run["_desk"].done_note() if run.get("_desk") is not None else ""
             yield {"type": "error", "message": "\n\n".join(x for x in (FAILED, done) if x)}
         finally:
+            self._memory_cache.pop(user_id, None)  # 这一轮读的记忆用完就放掉（§206）
             # 这一轮存下、卡片却没发出去的预览（出错、断开、被取消）作废（§120）；放进后台，取消时也能跑完
             if (desk := run.pop("_desk", None)) is not None and desk.drafts:
                 self._later(user_id, self._drop_drafts(user_id, desk.drafts))
@@ -1465,6 +1530,7 @@ class IronMAgent:
         # 1. 安全前置：判定只用规则。急症与红旗交给模型说，代码查必须说到的几点（停下、120 或就医、
         #    不给训练安排），没说到或模型失败时退回四段式固定回答（spec [2026-10-23] §86）；不读数据、不调工具
         self._coach_cache.pop(user_id, None)  # 管家方案每轮重新读一次（§97）
+        self._memory_cache.pop(user_id, None)  # 记忆也是（§206）
         assessment = assess(text)
         refusals = default_refusals().detect(text)
         replies = _replies()
@@ -1714,7 +1780,8 @@ class IronMAgent:
 
         lay = layers(raw, snapshot.today)
         try:
-            earlier_sessions = await self._summary_store().latest(user_id, session_id, SHOW)
+            # 太久以前的会话不带（§205）
+            earlier_sessions = fresh(await self._summary_store().latest(user_id, session_id, SHOW))
         except Exception as e:
             _log.warning("summary unavailable: error_type=%s", type(e).__name__)
             earlier_sessions = []
@@ -1729,6 +1796,7 @@ class IronMAgent:
             session_id=session_id, calcs=case.calcs, context=tools_ctx,
             meds=self._meds_source(), medical=self._medical_source(),
             extra={**EXTRA_TOOLS, RECALL: (RECALL_SCHEMA, recall_tool(raw, snapshot.today, load=everything)),
+                   READ_CHAT: (READ_CHAT_SCHEMA, chat_tool(session_id, text)),  # 翻本会话原文（§207）
                    **self._web_tools(snapshot.today), **self._timeline_tool(user_id, everything, snapshot.today),
                    **self._weather_tool(user_id)},
         )  # fmt: skip

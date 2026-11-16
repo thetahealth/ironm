@@ -45,9 +45,11 @@ RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#deb.debian.org#${APT_MIRROR}#g" /etc
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app /app
 COPY --chmod=755 docker/entrypoint.sh /app/docker/entrypoint.sh
+# TZ：日期和钟点按中国时间算（§204）；compose.yaml 会把 .env 里的 TZ 传进来盖过这里
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    IRONM_DATA_DIR=/data
+    IRONM_DATA_DIR=/data \
+    TZ=Asia/Shanghai
 # 固定的 uid / gid：数据卷按编号认主人
 RUN groupadd --system --gid 10001 ironm \
     && useradd --system --uid 10001 --gid 10001 --create-home ironm \

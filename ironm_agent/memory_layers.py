@@ -6,25 +6,24 @@
   代码每天生成的"该问的"（反复疼、练得远少于计划、很久没确认）去掉了（§182）：以前生成的不再带；
 - 很久没确认的记忆：器械、可练时间、训练水平 90 天、伤病 60 天没更新的，带上次确认的日期列给管家（事实，最多 3 条），
   问不问由管家定；
-- 查记忆工具：按关键词、天数（传入 similar 时再加上语义相似）查全部记忆，含已结束、被取代的。
+- 查记忆工具：按关键词、天数查全部记忆，含已结束、被取代的；关键词没对上的，同一处身体、同一类事、
+  说法相近的也算（§159）。不做向量检索（§73 非目标）。
 
-每轮只常驻目标和安全相关的几类，其余按这一轮的决定取（spec 2026-10-30 记忆改进）：日程、饮食、偏好
-不再全量拼进提示词，条目多了也不稀释注意力；没给决定时（测试、旧调用）仍全带。
-画像、情景还是存在 ironm_memory 里（同一张表、同一套核对），这里只管怎么分层、怎么拼给 Agent。
+每轮带整份画像（§73 需求 10），太多时按 §205 的上限截。画像、情景还是存在 ironm_memory 里（同一张表、同一套核对），这里只管怎么分层、怎么拼给 Agent。
 不调用模型。
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ironm_agent.memory_extract import norm
-from ironm_agent.memory_store import CATEGORIES, Category, Item, absolute
-from ironm_agent.memory_view import advice_expired, faded, fading
+from ironm_agent.memory_store import CATEGORIES, Item, absolute
+from ironm_agent.memory_view import ADVICE_KEEP, EVENT_DAYS, fading, in_effect, trim
 
 PROFILE: tuple[str, ...] = (
     "goal",
@@ -37,23 +36,10 @@ PROFILE: tuple[str, ...] = (
     "preference",
     "style",
 )
-# 每轮常驻：目标、伤病、器械、训练水平、回答风格（都是短行，且几乎每类回答都要用）。
-# 日程、饮食、偏好按这一轮的决定取（DECISION），避免把整本档案塞进提示词。
-ALWAYS: tuple[Category, ...] = ("goal", "injury", "special", "equipment", "level", "style")
-DECISION: dict[str, tuple[Category, ...]] = {
-    "train": ("schedule", "preference"),
-    "plan": ("schedule", "preference"),
-    "eat": ("diet", "preference"),
-    "recover": ("schedule", "diet"),
-    "data": ("diet",),
-}
-EVENT_DAYS = 7  # 没写到哪天为止的近况，影响训练几天
 ASK_GRACE = 3  # 过了结束日几天内问一句"结束了吗"，之后当已结束
 DUE_KEEP = 7  # 到期的待跟进过期几天后不再带
 ASK_MAX = 3  # 每轮最多带几条该问的
-ADVICE_KEEP = 3  # 情景里带最近几条给过的建议
-SEMANTIC_MIN = 0.42  # 语义召回的最低相似度（fastembed 余弦）
-SEMANTIC_MAX = 5  # 一次最多补几条语义命中
+NEAR_MAX = 5  # 说法相近的一次最多补几条
 COVER_MIN = 0.5  # 查询词的两字片段有一半出现在记忆里，算说法相近（§159，不加依赖）
 # 查旧记忆时同一类的说法（§159）：查"出差"也找"去上海开会"，查"睡眠"也找"熬夜"
 _RECALL_KINDS = tuple(re.compile(p) for p in (
@@ -96,12 +82,14 @@ class Layers:
     episodes: list[str] = field(default_factory=list)
     asks: list[str] = field(default_factory=list)
     stale: list[str] = field(default_factory=list)  # 很久没确认的记忆和上次确认的日期（事实，§182）
+    more: int = 0  # 画像太多、这一轮没列出的条数（§205）
 
     def text(self, today: date, summaries: Sequence[str] = ()) -> str:
         """日期在档案里已经写了，这里不再重复（§96）。"""
         parts = [
             "用户画像（长期的情况；编号｜类别：内容（更新日期，来源）；带？的是推测，不当事实用，合适时问一句确认）：\n"
-            + ("\n".join(self.profile) or "（还没有）"),
+            + ("\n".join(self.profile) or "（还没有）")
+            + (f"\n（还有 {self.more} 条较早的没列出，用到时用 recall_memory 查）" if self.more else ""),
             "情景记忆（最近发生、还在影响训练的事和给过的建议；更早的用 recall_memory 查）：\n"
             + ("\n".join(self.episodes) or "（没有）"),
         ]
@@ -123,12 +111,8 @@ class Layers:
         return "\n\n".join(parts)
 
 
-def layers(items: Sequence[Item], today: date, focus: Collection[str] | None = None) -> Layers:
-    """把这个人的记忆分成画像、情景、该问的。被取代的不带；推测的只在画像里带"？"。
-
-    focus 是这一轮的决定（train / plan / eat / recover / data）。None 表示没给决定，画像全带（旧行为）；
-    给了就只带 ALWAYS 里的几类，加上这些决定各自要的类别（DECISION）。
-    """
+def layers(items: Sequence[Item], today: date) -> Layers:
+    """把这个人的记忆分成画像、情景、该问的。被取代的不带；推测的只在画像里带"？"。"""
     out = Layers()
     n = 0
     guesses: list[str] = []
@@ -144,19 +128,22 @@ def layers(items: Sequence[Item], today: date, focus: Collection[str] | None = N
 
     gone = shadowed(items)  # 同一件事以最近的为准（§113）
     live = [x for x in items if x.status != "superseded" and x.id not in gone]
-    cats = (
-        set(PROFILE)
-        if focus is None
-        else set(ALWAYS) | {c for f in focus for c in DECISION.get(f, ())}
-    )
+    # 还算数的（淡出、过期的不算）只在 memory_view.in_effect 里定义（§207）；近况另按结束日分成"还在"和"该问一句"
+    counts = {x.id for x in in_effect(items, datetime(today.year, today.month, today.day, 12).astimezone())}
+    cats = set(PROFILE)
+    chosen: list[Item] = []
     for x in sorted((x for x in live if x.category in cats),
                     key=lambda x: (PROFILE.index(x.category), x.updated)):  # fmt: skip
         if x.status == "resolved" and x.category != "injury":
             continue  # 旧伤好了还带着（写明已好），别的已解决的长期情况不带
         if x.status == "pending" and (today - _day(x)).days > PENDING_DAYS:
             continue  # 推测的过了几天没确认：不再当事实带（§154），查记忆还查得到
-        if faded(x, today):
-            continue  # 喜好这类四个月没再提：不带了（§157），查记忆还查得到
+        if x.id not in counts:
+            continue  # 喜好这类四个月没再提（§157）、训练记录得出的偏好没再被支持（§17）：不带，查记忆还查得到
+        chosen.append(x)
+    kept = trim(chosen)  # 太多时照 §17 的上限：每类留最近的若干条，伤病、特殊情况排最前（§205）
+    out.more = len(chosen) - len(kept)
+    for x in kept:
         mark = "？" if x.status == "pending" else ""
         state = "（已好）" if x.status == "resolved" else ""
         src = "推测的" if x.status == "pending" else "你说的" if x.origin != "data" else "训练记录"
@@ -183,7 +170,7 @@ def layers(items: Sequence[Item], today: date, focus: Collection[str] | None = N
                 f"{handle(x)}｜「{said(x)}」说到{_md(end)}为止，没听他说结束：可以问一句是不是结束了"
             )
     advice = [x for x in live if x.category == "advice" and x.status == "active"
-              and not advice_expired(x, today)]  # 过期的建议不再带（§109）  # fmt: skip
+              and x.id in counts]  # 过期的建议不再带（§109）  # fmt: skip
     for x in sorted(advice, key=_day)[-ADVICE_KEEP:]:
         out.episodes.append(f"{handle(x)}｜给过的建议：{said(x)}（{_md(_day(x))}）")
 
@@ -240,13 +227,9 @@ def search(
     days: int,
     today: date,
     limit: int = 20,
-    similar: Callable[[str, Sequence[str]], Sequence[float]] | None = None,
 ) -> str:
-    """按关键词（空就是全部）、最近几天查记忆，含已结束、被取代的，新的在前。
-
-    传了 similar（本机向量）时再加一路语义召回：说法和记忆对不上但意思相近的也能查到
-    （spec 2026-10-30 记忆改进），关键词命中排前面，语义命中补在后面。
-    """
+    """按关键词（空就是全部）、最近几天查记忆，含已结束、被取代的，新的在前；
+    关键词没对上的，同一处身体、同一类事、说法相近的补在后面（§159）。"""
     q = norm(query)
     start = today - timedelta(days=max(1, min(days, 365)))
     hits = [x for x in items if _day(x) >= start and (not q or q in norm(x.content)
@@ -254,16 +237,6 @@ def search(
     hits.sort(key=lambda x: x.created, reverse=True)  # 关键词命中的排前面，补的跟在后面（复核 11-04）
     if q:  # 关键词没对上的：同一处身体、同一类事、说法相近的也算（§159）
         hits += _related(query, [x for x in items if _day(x) >= start and x not in hits])
-    if q and similar is not None:
-        pool = [x for x in items if _day(x) >= start]
-        if pool:
-            try:
-                sims = similar(query, [f"{CATEGORIES[x.category]}：{x.content}" for x in pool])
-            except Exception:  # 向量模型不可用：照旧只用关键词
-                sims = []
-            extra = [x for x, score in sorted(zip(pool, sims, strict=True), key=lambda t: -t[1])
-                     if score >= SEMANTIC_MIN and x not in hits]  # fmt: skip
-            hits += extra[:SEMANTIC_MAX]
     if not hits:
         return "没有查到。"
     state = {
@@ -288,7 +261,7 @@ def _related(query: str, pool: Sequence[Item]) -> list[Item]:
     rest = [x for x in pool if x not in near]
     fuzzy = sorted(((len(grams & _grams(x.content)) / len(grams), x) for x in rest if grams),
                    key=lambda t: -t[0])  # fmt: skip
-    return near + [x for score, x in fuzzy if score >= COVER_MIN][:SEMANTIC_MAX]
+    return near + [x for score, x in fuzzy if score >= COVER_MIN][:NEAR_MAX]
 
 
 def _grams(text: str) -> set[str]:
@@ -323,7 +296,6 @@ RECALL_SCHEMA: dict[str, Any] = {
 def recall_tool(
     items: Sequence[Item],
     today: date,
-    similar: Callable[[str, Sequence[str]], Sequence[float]] | None = None,
     load: Callable[[], Awaitable[Sequence[Item]]] | None = None,
 ) -> Any:
     """load：查的时候才去库里取全部（含归档了的历史，§157）；取不到就用这一轮已经取的。"""
@@ -339,6 +311,6 @@ def recall_tool(
                 pool = await load()
             except Exception:  # 库读不到：用这一轮已经取的
                 pool = items
-        return search(pool, str(args.get("query") or ""), days, today, similar=similar)
+        return search(pool, str(args.get("query") or ""), days, today)
 
     return run

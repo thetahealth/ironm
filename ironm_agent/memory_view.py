@@ -17,7 +17,7 @@ from ironm_agent.memory_store import CATEGORIES, Category, Item, absolute, now
 EVENT_DAYS = (
     7  # 没写到哪天为止的近期事件，多少天后不再用于回答（spec [2026-10-23] §73，原来 14 天）
 )
-ADVICE_KEEP = 5  # 给过的建议只带最近几条
+ADVICE_KEEP = 3  # 给过的建议只带最近几条（§207：和四层记忆同一个数）
 DATA_DAYS = 56  # 训练记录得出的偏好多少天没再被数据支持就不用
 ADVICE_DAYS = 14  # 给过的建议多少天后不再给管家看（spec [2026-10-23] §109）
 MAX_FACTS = 60  # 超过这么多条有效记忆时按类别和优先级读取
@@ -124,7 +124,41 @@ def expired(item: Item, at: datetime | None = None) -> bool:
     return at - item.created > timedelta(days=EVENT_DAYS)
 
 
-def _trim(facts: list[Item]) -> list[Item]:
+def in_effect(items: Sequence[Item], at: datetime | None = None) -> list[Item]:
+    """这一轮还算数的记忆，只在这里定义（§207），档案和工具用的（Recall）、四层记忆（memory_layers）都从这里取：
+    被取代的、同一件事里更早的那条（§113）、淡出的（§157）、过期的（建议 §109、近况、训练记录得出的偏好 §17）不算。
+    待确认的、已解决的、待跟进的算不算，由用的地方按各自的用途定。"""
+    from ironm_agent.latest import shadowed
+
+    gone = shadowed(items)
+    return [x for x in items if x.status != "superseded" and x.id not in gone and not expired(x, at)]
+
+
+EXTRACT_KEEP = 7  # 近况、待跟进到期后还给整理记忆的模型看几天（§205）
+
+
+def for_extract(items: Sequence[Item], today: date) -> list[Item]:
+    """整理记忆时交给模型的已有记忆（§205）：只给还在用的——没归档的、同一件事里最近的那条、
+    到期 7 天以内的近况和待跟进、没过期的建议。只管给不给模型看，库里不动，查旧记忆照样查得到。"""
+    from ironm_agent.latest import shadowed
+
+    gone = shadowed(items)  # 同一件事以最近的为准（§113）
+    out = []
+    for x in items:
+        if x.status == "superseded" or x.id in gone or archived(x, today):
+            continue
+        if x.category in ("event", "followup"):
+            end = (x.updated.astimezone().date() if x.status == "resolved"
+                   else x.until or x.created.astimezone().date() + timedelta(days=EVENT_DAYS))  # fmt: skip
+            if (today - end).days > EXTRACT_KEEP:
+                continue
+        if x.category == "advice" and advice_expired(x, today):
+            continue
+        out.append(x)
+    return out
+
+
+def trim(facts: list[Item]) -> list[Item]:
     """记忆太多时：已解决的只留最近几条；每类留最近的若干条；再按优先级取满上限。"""
     if len(facts) <= MAX_FACTS:
         return facts
@@ -165,14 +199,11 @@ class Recall:
 
     @classmethod
     def of(cls, items: Sequence[Item], at: datetime | None = None) -> Recall:
-        from ironm_agent.latest import shadowed
-
-        gone = shadowed(items)  # 同一件事以最近的为准（§113）
-        usable = [x for x in items if x.status in ("active", "resolved") and not expired(x, at)
-                  and x.category != "followup" and x.id not in gone]  # 待跟进只在四层记忆里用（§73）  # fmt: skip
+        usable = [x for x in in_effect(items, at) if x.status in ("active", "resolved")
+                  and x.category != "followup"]  # 待跟进只在四层记忆里用（§73）  # fmt: skip
         advice = [x for x in usable if x.category == "advice"][-ADVICE_KEEP:]
         facts = [x for x in usable if x.category != "advice"]
-        kept = _trim(facts)
+        kept = trim(facts)
         kept.sort(key=lambda x: (ORDER.index(x.category), x.created))
         return cls((*kept, *advice), len(facts) - len(kept))
 

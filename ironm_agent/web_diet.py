@@ -43,7 +43,11 @@ USUAL_TIMES = 3  # 记过 3 次以上算常吃的
 
 def food_json(f: Food) -> dict[str, Any]:
     p = f.per_100()
-    return {
+    from ironm_agent.chains import item_json, item_of
+
+    chain = item_of(f.id)  # 连锁店餐品（§203）：页面按一份显示，带出处
+    extra = {"chain": {**item_json(chain[0]), "size": chain[1]}} if chain else {}
+    return {**extra,
         "id": f.id, "name": f.name, "cat": f.cat, "dish": f.dish, "unit": f.unit, "unit_g": f.unit_g,
         "oil_g": f.oil,  # 菜品一份（unit_g）里正常用多少油：页面按油量预估用
         "image": image_for(f"food:{f.id}"),
