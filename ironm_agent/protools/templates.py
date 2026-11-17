@@ -451,7 +451,13 @@ def plan_templates(
     weekdays: Sequence[int] = (),
     name: str = "",
     special: Collection[str] = (),
+    prefer: Collection[str] = (),
+    avoid: Collection[str] = (),
+    focus: Collection[str] = (),
+    done: Collection[str] = (),
+    week: int = 1,
 ) -> Result:
+    """没点名时第一份是按七步算出的"按你的情况排"（§217），第二份是方案库里最合适的；点名、特殊人群照旧只用方案库。"""
     people = people_of(age)
     said: list[str] = []
     asked = named(name)
@@ -480,7 +486,18 @@ def plan_templates(
         )
         if x
     )
-    if not picked:
+    built = None
+    if not asked and people == "adult" and not special:  # 60 岁以上、未成年、孕期等用方案库里专门的方案（§95）
+        from ironm_agent.protools.builder import build
+
+        try:
+            built = build(level=level, goal=goal, days=days, minutes=minutes, place=place, equipment=equipment,
+                          injured=injured, weekdays=weekdays, prefer=prefer, avoid=avoid, focus=focus, done=done,
+                          week=week)  # fmt: skip
+            picked = picked[:1]
+        except ValueError:  # 算不出来（没有可用的动作）：退回方案库
+            said.append("按你的情况没能算出一份计划（可用的动作不够），下面是方案库里的。")
+    if not picked and built is None:
         return Result.note(
             f"条件：{cond}。",
             "方案库里没有合适的初步方案（人群、水平、场地或器械对不上）。按规程自己排，并说明没有现成方案可套。",
@@ -490,7 +507,32 @@ def plan_templates(
     notes = [f"条件：{cond}。", *said]
     entries: list[str] = []
     drafts: list[tuple[str, object]] = []
-    for i, c in enumerate(picked, start=1):
+    if built is not None:
+        plan = built.plan
+        checked = check_plan(plan, goal=goal, novice=level in (None, "none", "lt6m"), injured=injured,
+                             equipment=equipment, available_days=days, available_minutes=minutes)  # fmt: skip
+        verdict = next((f.text for f in checked.findings if f.name == "计划检查"), "")
+        findings.append(
+            Finding(
+                "方案1「按你的情况排」",
+                "；".join((f"{built.structure}，每周 {plan.days_per_week} 次",
+                          *(weekday_name(s.day) + s.name for s in plan.sessions))),
+                "按七步算出：分化结构、每周组数、动作位、挑动作、剂量、阶段、检查；不是从方案库里套的",
+                cond,
+                "K03、K04、K05、K28、K30、K31、K37、K48、K61、K87；标〔经验〕的数和动作标注待审定",
+            )
+        )
+        notes += [
+            "方案1「按你的情况排」（custom）",
+            "- 为什么这样排（七步各一句，讲给他听时挑他关心的说，不用全念）：",
+            *(f"  {i}. {line}" for i, line in enumerate(built.why, start=1)),
+            *(f"- {x}" for x in built.notes),
+            f"- 计划检查：{verdict}",
+            f"- 草稿（可以直接交，propose_new_plan 写 template=custom，要改的写进 ops）：{as_json(plan)}",
+        ]
+        entries += [e for e in checked.entries if e not in entries]
+        drafts.append(("custom", plan))
+    for i, c in enumerate(picked, start=2 if built is not None else 1):
         t = c.template
         plan, changes = draft(t, c.days, goal=goal, equipment=equipment, injured=injured,
                               weekdays=weekdays, minutes=minutes, level=level)  # fmt: skip
@@ -499,7 +541,7 @@ def plan_templates(
                 0, f"按{LEVELS[level]}减到每个动作最多 {t.novice_sets[level]} 组，不做到力竭"
             )
         if t.standard and not asked and c.days in (t.standard_weeks or t.weeks):
-            changes.insert(0, "这是一般人的标准方案：一般成年人没点名时默认用这一份")
+            changes.insert(0, "这是一般人的标准方案：方案库里一般成年人没点名时默认用这一份")
         checked = check_plan(plan, goal=goal, novice=level in (None, "none", "lt6m"),
                              injured=injured, equipment=equipment, available_days=days,
                              available_minutes=minutes, special=special)  # fmt: skip

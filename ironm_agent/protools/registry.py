@@ -198,7 +198,29 @@ async def _templates(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
         weekdays=weekdays,
         name=str(args.get("name") or "").strip(),
         special=ctx.special,
+        prefer=_names(args, "prefer"),
+        avoid=_names(args, "avoid"),
+        focus=_names(args, "focus"),
+        done=await _done(ctx),
+        week=_int(args, "week") or 1,
     )
+
+
+def _names(args: Mapping[str, Any], key: str) -> list[str]:
+    raw = args.get(key)
+    return [str(x).strip() for x in raw if str(x).strip()][:8] if isinstance(raw, list) else []
+
+
+async def _done(ctx: ToolContext) -> list[str]:
+    """最近 8 周练过哪些动作（§217：挑动作时接着用）；读不到当作没有。"""
+    if ctx.workouts is None:
+        return []
+    try:
+        logs = await ctx.workouts(ctx.today - timedelta(days=56))
+    except Exception as e:
+        _log.warning("workouts unavailable: error_type=%s", type(e).__name__)
+        return []
+    return list(dict.fromkeys(i.exercise for log in logs for i in log.items))
 
 
 async def _cardio(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
@@ -426,8 +448,9 @@ TOOLS: dict[str, ProTool] = {
         ProTool(
             "plan_templates",
             frozenset({"trainer", "general"}),
-            "选初步方案：按训练水平、目标、每周天数、每次时长、场地、年龄，从方案库挑出最合适的 1–2 个方案，"
-            "按他有的器械和伤病换成具体动作、排好周几，给出能直接改的计划草稿和为什么这样排、怎么进阶。"
+            "选初步方案：没点名时第一份是按他的情况一步步算出来的（分化结构、每周组数、挑动作、次数、8 周的阶段，"
+            "每一步都写了为什么），第二份是方案库里最合适的一份；都按他有的器械和伤病排好了具体动作和周几，"
+            "给出能直接改的计划草稿。他说过喜欢、不想做的动作和想重点练的部位，填进 prefer、avoid、focus。"
             "排新计划时先调它，再照这个人改；他的器械、伤病、年龄系统已经知道，他这几轮说的新条件填进参数。"
             "他点名要某个博主或某套计划时，把他说的名字填进 name。"
             "问有多少训练计划、有哪些计划时，什么都不填，返回方案库的全部方案。",
@@ -452,6 +475,14 @@ TOOLS: dict[str, ProTool] = {
                         "type": "string",
                         "description": "他点名要的博主或计划名（如“谭成义”），没点名不填",
                     },
+                    "prefer": {"type": "array", "items": {"type": "string"},
+                               "description": "他说过喜欢的动作名（他说过才填）"},
+                    "avoid": {"type": "array", "items": {"type": "string"},
+                              "description": "他说过不想做的动作名（他说过才填）"},
+                    "focus": {"type": "array", "items": {"type": "string", "enum": ["胸", "背", "股四头肌", "臀", "肩"]},
+                              "description": "他说了想重点练的部位（他说过才填）"},
+                    "week": {"type": "integer", "minimum": 1, "maximum": 8,
+                             "description": "现在是 8 周周期的第几周；新排的不填（第 1 周）"},
                 },
             ),
             _templates,

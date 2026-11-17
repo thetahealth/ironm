@@ -59,6 +59,11 @@ serve)
     ( python scripts/fetch_asr_model.py > /tmp/fetch-asr.log 2>&1 || echo "语音模型没下到，下次启动再试；不影响打字" ) &
   fi
 
+  if [ "${IRONM_POSE:-1}" = 1 ]; then
+    # 训练中摄像头看动作的识别文件（§218，约 20 MB）：没有才下，下好之前训练页不显示这个开关
+    ( python scripts/fetch_pose_model.py > /tmp/fetch-pose.log 2>&1 || echo "动作识别文件没下到，下次启动再试；不影响手动记" ) &
+  fi
+
   echo "IronM 起来后用浏览器打开：http://127.0.0.1:${IRONM_PORT:-18090}/iron/"
   cd /app/vendor/mirobody   # mirobody 自带的网页按这个目录找
   exec python -m ironm_agent.server --host 0.0.0.0 --port 18090

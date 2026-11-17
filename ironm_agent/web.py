@@ -813,3 +813,8 @@ router.include_router(_video_plan)
 from ironm_agent.web_chains import router as _chains  # noqa: E402
 
 router.include_router(_chains)
+
+# 训练中摄像头看动作的识别文件（spec [2026-10-23] §218）
+from ironm_agent.web_pose import router as _pose  # noqa: E402
+
+router.include_router(_pose)

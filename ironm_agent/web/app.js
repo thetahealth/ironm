@@ -324,7 +324,7 @@ async function home(view) {
     trainCard(brief, training, week, lib, photos?.images || {}),
     coachCard(),
     eatCard(meals, m),
-    vitalsRow(brief),
+    vitalsRow(brief, m),
     weekStrip(training, week));
 }
 
@@ -754,15 +754,68 @@ function heroCoach(el, v, ctl) {
   else el.hidden = true;
 }
 
-// 睡眠、静息心率小格（§121 需求 4；天气挪进今日委托，§197）：有数据的才显示，读不到不编
-function vitalsRow(brief) {
-  const w = brief?.week;
-  const cell = (cls, k, v, u, sub) => h("div", { class: `vt ${cls}` }, h("span", { class: "vt-k" }, k), h("b", { class: "num" }, v, u ? h("small", {}, ` ${u}`) : null), sub ? h("span", { class: "vt-sub" }, sub) : null);
-  const cells = [
-    w?.sleep?.value != null ? cell("sleep", "睡眠 · 近 7 天", String(w.sleep.value), "小时", w.sleep.brief) : null,
-    w?.resting_hr?.value != null ? cell("hr", "静息心率", String(Math.round(w.resting_hr.value)), "次/分", w.resting_hr.brief) : null,
-  ].filter(Boolean);
+// 睡眠、静息心率小格（§121 需求 4；天气挪进今日委托，§197）：大数字是今天的那一条，小字写近 7 天平均；
+// 点开看近一周、近一个月，最下面能自己记（§225）。用数据页同一份指标（series 一天一个数）；
+// 两格一直在（没记录也能自己记），只有指标整个读不到时不放
+const VITALS = [["sleep", "sleep", "睡眠"], ["resting_hr", "hr", "静息心率"]];
+// 从 today 往前数 days 天（含今天），每天 [日期, 值或 null]；按日期算，不按条数
+function vitalDays(series, today, days) {
+  const by = {};
+  for (const [d, v] of series || []) if (v != null) by[String(d).slice(0, 10)] = v;
+  const [y, mo, dd] = String(today).slice(0, 10).split("-").map(Number);
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const iso = new Date(Date.UTC(y, mo - 1, dd - i)).toISOString().slice(0, 10);
+    out.push([iso, iso in by ? by[iso] : null]);
+  }
+  return out;
+}
+function vitalStats(days) {
+  const vs = days.map((p) => p[1]).filter((v) => v != null);
+  return vs.length ? { n: vs.length, avg: vs.reduce((a, b) => a + b, 0) / vs.length, hi: Math.max(...vs), lo: Math.min(...vs) } : null;
+}
+const vitalNum = (key, v) => (v == null ? "—" : key === "resting_hr" ? String(Math.round(v)) : String(Math.round(v * 10) / 10));
+function vitalsRow(brief, m) {
+  const today = brief?.today?.date || isoDay(new Date());
+  const cells = VITALS.map(([key, cls, name]) => {
+    const x = m?.[key];
+    if (!x) return null;
+    const month = vitalDays(x.series, today, 30);
+    const had = month.filter((p) => p[1] != null);
+    const now = month[month.length - 1][1], last = had[had.length - 1];
+    const sub = now != null ? `近 7 天平均 ${vitalNum(key, vitalStats(month.slice(-7)).avg)}`
+      : last ? `最近 ${md(last[0])} ${vitalNum(key, last[1])}` : "点这里记一条";
+    return pressable(h("div", { class: `vt ${cls}`, "aria-label": `${name}，点开看近一周、近一个月` },
+      h("span", { class: "vt-k" }, `${name} · 今天`),
+      h("b", { class: "num" }, vitalNum(key, now), now != null ? h("small", {}, ` ${x.unit}`) : null),
+      h("span", { class: "vt-sub" }, sub)), () => vitalSheet(x, today));
+  }).filter(Boolean);
   return cells.length ? h("div", { class: "vitals", style: `--n:${cells.length}` }, cells) : null;
+}
+// 详情（§225）：切近一周、近一个月；图、平均、最高、最低、有几天记录跟着换；近一周列出每天的值
+function vitalSheet(m, today) {
+  let span = 7;
+  const seg = h("div", { class: "seg seg-2", role: "tablist", "aria-label": "时间范围" });
+  const body = h("div", { class: "vital-body" });
+  const draw = () => {
+    seg.replaceChildren(...[[7, "近一周"], [30, "近一个月"]].map(([n, label]) => h("a", {
+      href: "#home", role: "tab", class: span === n ? "on" : "", "aria-selected": String(span === n),
+      onclick: (e) => { e.preventDefault(); span = n; draw(); },
+    }, label)));
+    const days = vitalDays(m.series, today, span), st = vitalStats(days), pts = days.filter((p) => p[1] != null);
+    const stat = (k, v, u) => h("div", {}, h("span", {}, k), h("b", { class: "num" }, v, h("small", {}, ` ${u}`)));
+    body.replaceChildren(
+      pts.length > 1 ? chart({ ...m, series: pts }) : null,
+      st ? h("div", { class: "vital-stats" }, stat("平均", vitalNum(m.key, st.avg), m.unit), stat("最高", vitalNum(m.key, st.hi), m.unit),
+        stat("最低", vitalNum(m.key, st.lo), m.unit), stat("有记录", String(st.n), `/ ${span} 天`)) : h("p", { class: "muted" }, `这 ${span} 天没有记录。`),
+      span === 7 ? h("ul", { class: "vital-days" }, days.slice().reverse().map(([d, v]) =>
+        h("li", {}, h("span", {}, d === today ? "今天" : md(d)), h("b", { class: "num" }, vitalNum(m.key, v), v != null ? h("small", {}, ` ${m.unit}`) : null)))) : null);
+  };
+  draw();
+  const facts = [["结论（近 7 天）", m.text], ["依据", m.source]].filter(([, v]) => v);
+  openSheet(m.name, seg, body, h("dl", { class: "facts" }, facts.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))),
+    h("div", {}, h("h3", {}, "自己记一条、改或删"), recordBox(MANUAL[m.key])),
+    vitalStats(vitalDays(m.series, today, 30)) ? null : h("button", { class: "btn ghost block", type: "button", onclick: appleSheet }, icon("phone", "sm"), "导入苹果健康数据"));
 }
 
 // 搭子的调整（§104 需求 3、§121 需求 4）：钛金色"搭子说"条，在首页直接点"好 / 暂不 / 不用这样调"，不跳进对话
@@ -1022,7 +1075,7 @@ async function hotStrip() {
     h("span", { class: "hot-label" }, "今日热搜"),
     rows.length ? h("span", { class: "hot-rows" }, rows.map((x, i) => h("span", { class: "hot-row" }, h("b", {}, String(i + 1)), x.name,
       x.flag ? h("em", { class: `rk-flag f-${{ 热: "hot", 新: "new", 升: "up" }[x.flag]}` }, x.flag) : null)))
-      : h("span", { class: "hot-rows muted" }, "排行榜刚开，去评第一个"),
+      : h("span", { class: "hot-rows muted" }, "看看大家都在练什么、吃什么"),
     icon("chevron", "sm"));
 }
 
@@ -3723,8 +3776,7 @@ async function rankHome(view) {
       h("b", { class: i < 4 ? "hi" : "" }, String(i + 1)), x.term, x.flag ? h("em", { class: `rk-flag f-${{ 热: "hot", 新: "new", 升: "up" }[x.flag]}` }, x.flag) : null))) : null;
   ringBox.append(...rankRing(d));
   view.append(
-    h("div", { class: "rk-search" }, icon("search", "sm"), input), hot, results, ringBox,
-    h("p", { class: "caption", style: "padding:0 2px" }, "用户评分，不代表平台观点。每人一票（夯 5 分 … 拉 1 分），不到 3 票的在待评。"));
+    h("div", { class: "rk-search" }, icon("search", "sm"), input), hot, results, ringBox);
 }
 
 // 转盘：正面一个榜，两侧露出前后两个；一次滑动只换一个；不碰时每 4.5 秒换下一个，碰过停 6 秒
@@ -3823,7 +3875,7 @@ function rankRing(d) {
     if (document.hidden || drag || !ring.isConnected || ring.closest("[hidden]") || Date.now() - touched < 6000) return;
     turn(Math.round(pos) + 1, 800);
   }, 4500);
-  return [ring, h("div", { class: "rk-ctl" }, dots, h("span", { class: "caption" }, "左右滑，一次换一个榜"))];
+  return [ring, h("div", { class: "rk-ctl" }, dots)];
 }
 
 // 两步确认（页面里不弹框）：第一次点按钮变成"确认…"，3 秒内再点才执行
@@ -3867,7 +3919,7 @@ async function rankBoard(view, board, part) {
     board === "move" ? h("div", { class: "pills" }, h("a", { class: `pill${part ? "" : " on"}`, href: partHref("") }, "全部"),
       (rankParts || MOVE_PARTS).map((p) => h("a", { class: `pill${p === part ? " on" : ""}`, href: partHref(p) }, p))) : null,
     // 没人评时不写"0 人参与""待评 N 个""没人评"（§161）
-    h("p", { class: "caption" }, `${d.people ? `${d.people} 人参与 · ` : "还没人评过，点进去打第一个分。"}${d.disclaimer}${part ? " 按部位看时名次是这个部位里的，不显示名次变化。" : ""}`),
+    h("p", { class: "caption" }, `${d.people ? `${d.people} 人参与。` : "还没人评过，点进去打第一个分。"}${part ? "按部位看时名次是这个部位里的，不显示名次变化。" : ""}`),
     d.people ? sorts : null, list,
     waiting.length ? h("section", { class: "rk-pending" }, d.people ? h("h3", {}, `待评 ${waiting.length} 个 · 3 个人评过才上榜`) : null,
       waiting.map((x) => h("a", { href: itemHref(board, x.key) }, rkPic(x, d.icon, "rk-pic sm"), rkLabel(x), x.votes ? h("small", {}, `还差 ${d.min_votes - x.votes} 票`) : null))) : null);
@@ -3936,7 +3988,6 @@ async function rankItem(view, board, key) {
         h("div", { class: "tier-pick" }, d.tiers.map((t) => h("button", { class: `tier-btn t-${t.key}${x.mine === t.key ? " on" : ""}`, type: "button", "aria-pressed": String(x.mine === t.key), onclick: () => vote(t.key) }, t.name))),
         msg),
       d.plan ? rankPlan(d.plan) : null,
-      h("p", { class: `rk-disclaim${d.no_claims ? " warn" : ""}` }, d.disclaimer),
       rankComments(d, board, key, send, cmSort, (s) => { cmSort = s; draw(); }),
       x.custom ? h("div", { class: "rk-foot" }, twoStep("举报这个条目", "确认举报？3 个人举报后先隐藏", (b) => api("/iron/api/rank/report", { method: "POST", body: JSON.stringify({ board, key }) })
         .then(() => { b.textContent = "已举报"; b.disabled = true; }).catch((err) => { b.textContent = err.message; }))) : null);
@@ -4789,6 +4840,106 @@ function drawFiles() {
     f.error ? h("small", {}, f.error) : f.data ? null : h("small", {}, `${Math.round(f.progress * 100)}%`),
     h("button", { type: "button", "aria-label": "去掉这个附件", onclick: () => { chat.files.splice(i, 1); drawFiles(); syncComposer(); } }, icon("x", "xs")))));
 }
+function askCoach(question) { chat.pending = question; closeSheet(); location.hash = "#chat"; }
+
+// 发训练视频（§224）：选动作、选视频，在这台设备上按摄像头看动作的同一套规则逐帧分析，结果写成一段文字交给
+// IronM 点评；视频不上传、不保存。对话记录里这段显示成结果卡片
+const VIDEO_RE = /〔动作视频分析〕\n([\s\S]*?)\n〔\/动作视频分析〕/;
+function videoCard(text) {
+  const m = String(text || "").match(VIDEO_RE);
+  if (!m) return null;
+  const lines = m[1].split("\n");
+  const result = (lines.find((l) => l.startsWith("结果：")) || "").slice(3);
+  const bad = lines.filter((l) => /^第 \d+ (个|秒)/.test(l));
+  return {
+    card: h("div", { class: "vcard" },
+      h("div", { class: "vcard-head" }, icon("clapper", "xs"), h("b", {}, "训练视频分析")),
+      h("small", {}, lines[0].replace(/^动作：/, "")),
+      h("p", {}, result),
+      bad.length ? h("details", {}, h("summary", {}, `${bad.length} 处问题`), h("ul", {}, bad.map((l) => h("li", {}, l)))) : null),
+    rest: String(text).replace(VIDEO_RE, "").trim(),
+  };
+}
+function videoSheet() {
+  const sel = h("select", { "aria-label": "哪个动作" }, h("option", { value: "" }, "选动作"),
+    ...[...CAM_MOVES].sort((a, b) => a.localeCompare(b, "zh")).map((m) => h("option", { value: m }, m)));
+  const file = h("input", { type: "file", accept: "video/*", class: "sr-only", disabled: true, onchange: () => {
+    const f = file.files[0]; file.value = "";
+    if (f && sel.value) { closeSheet(); openVideo(f, sel.value); }
+  } });
+  const pick = h("label", { class: "btn block off" }, file, icon("clapper", "sm"), "选视频");
+  sel.addEventListener("change", () => { file.disabled = !sel.value; pick.classList.toggle("off", !sel.value); });
+  openSheet("发训练视频", h("label", { class: "field vpick" }, h("span", {}, "动作"), sel),
+    h("p", { class: "muted" }, "拍全身，侧面或正面，一组就行"), pick,
+    h("p", { class: "muted small" }, "视频只在这台设备上分析，不上传"));
+}
+let vid = null;  // {el, video, run}
+function closeVideo() {
+  if (!vid) return;
+  vid.run?.stop();
+  const { video } = vid;
+  video.pause();
+  if (video.src.startsWith("blob:")) URL.revokeObjectURL(video.src);
+  vid.el.remove(); document.body.classList.remove("fc-on");
+  window.removeEventListener("hashchange", closeVideo);
+  vid = null;
+}
+async function openVideo(file, move) {
+  closeVideo();
+  const video = h("video", { playsinline: "", muted: "" }), canvas = h("canvas");
+  const count = h("b", { class: "num" }, "0"), unit = h("small", {}, "个");
+  const bar = h("i"), statusEl = h("div", { class: "fc-status", role: "status" }, "正在加载识别…");
+  const out = h("div", { class: "fc-result" });
+  const stopBtn = h("button", { class: "btn block ghost", type: "button", onclick: () => vid?.run?.stop() }, "停在这里，看结果");
+  const el = h("div", { class: "fc", role: "dialog", "aria-label": `训练视频分析：${move}` },
+    h("div", { class: "fc-top" }, h("button", { class: "icon-btn", type: "button", "aria-label": "关掉", onclick: closeVideo }, icon("x", "sm")), h("b", {}, move)),
+    h("div", { class: "fc-stage" }, video, canvas, h("div", { class: "fc-big" }, count, unit)),
+    h("div", { class: "fc-prog" }, bar), statusEl, out, stopBtn,
+    h("p", { class: "fc-note" }, "视频只在这台设备上分析，不上传"));
+  document.body.append(el); document.body.classList.add("fc-on");
+  vid = { el, video, run: null };
+  window.addEventListener("hashchange", closeVideo);
+  try {
+    const fc = await import("/iron/formcheck.js");
+    const hold = ["plank", "sideplank"].includes(fc.MOVES[move]);
+    if (hold) unit.textContent = "秒";
+    let n = 0;
+    const run = await fc.analyseVideo({ file, move, video, canvas, on: {
+      status: (t) => { statusEl.textContent = t; },
+      progress: (x) => { bar.style.width = `${Math.round(x * 100)}%`; },
+      event: (e) => {
+        if (e.type === "rep") count.textContent = String(++n);
+        else if (e.type === "tick") count.textContent = String(e.seconds);
+      } } });
+    if (vid?.el !== el) { run.stop(); return; }
+    vid.run = run;
+    const r = await run.done;
+    if (vid?.el !== el) return;
+    stopBtn.hidden = true; bar.style.width = "100%"; canvas.hidden = true; video.controls = true;
+    if (!r.started) {
+      statusEl.textContent = `没能分析：${r.status || "没认出人"}。换个角度再拍一段试试`;
+      statusEl.classList.add("error");
+      return;
+    }
+    const report = fc.videoReport(r);
+    statusEl.textContent = `分析完了：${(report.split("\n").find((l) => l.startsWith("结果：")) || "").slice(3)}`;
+    const jump = (at) => { video.currentTime = Math.max(0, at - 1.5); video.play(); };
+    const marks = hold ? r.cues.map((c) => [c.at, `第 ${Math.round(c.at)} 秒 · ${fc.RULES.find((x) => x.id === c.id).name}`])
+      : r.reps.filter((x) => x.faults.length).map((x) => [x.at, `第 ${x.n} 个 · 第 ${Math.round(x.at)} 秒 · ${x.faults.map((id) => fc.RULES.find((y) => y.id === id).name).join("、")}`]);
+    const q = h("input", { class: "fc-ask", placeholder: "想问什么（可不填）", "aria-label": "想问 IronM 什么" });
+    out.replaceChildren(
+      marks.length ? h("div", { class: "fc-marks" }, marks.map(([at, t]) => h("button", { type: "button", onclick: () => jump(at) }, icon("play", "xs"), t))) : null,
+      q,
+      h("button", { class: "btn block", type: "button", onclick: () => {
+        const ask_ = `${q.value.trim() || "帮我看看这组动作"}\n${report}`;
+        if (chat.busy) { statusEl.textContent = "IronM 还在回答上一句，说完再点"; return; }
+        closeVideo(); ask(ask_);
+      } }, "交给 IronM 点评"));
+  } catch (err) {
+    statusEl.textContent = err.message || "没能分析"; statusEl.classList.add("error"); stopBtn.hidden = true;
+  }
+}
+
 // 问答语音输入（§199）：点一下开始录、再点一下停。浏览器里录成 16kHz 单声道 WAV，传给我们自己服务器上的
 // 语音模型转文字，填进输入框接在已打的字后面，不自动发。录音不在浏览器里留，服务器转完也不留。
 const voice = { ok: null, max: 60 };
@@ -4889,8 +5040,6 @@ function voiceInput(input, grow) {
   return { mic, bar };
 }
 
-function askCoach(question) { chat.pending = question; closeSheet(); location.hash = "#chat"; }
-
 const STARTERS = [
   ["给我安排今天的训练", "按你的目标和状态"],
   ["深蹲时膝盖疼怎么办", "训练和恢复"],
@@ -4916,13 +5065,16 @@ function chatPage(view) {
   const form = h("form", { class: "composer" }, clip, cam, input, mic, send);
   const fresh = h("button", { class: "icon-btn", type: "button", "aria-label": "新对话", title: "新对话", onclick: () => { resetChat(); chat.loaded = true; drawThread(); input.focus(); } }, icon("plus", "sm"));
   const past = h("button", { class: "icon-btn", type: "button", "aria-label": "以前的对话", title: "以前的对话", onclick: historySheet }, icon("history", "sm"));
+  // 发训练视频（§224）：放在顶上，不挤输入框；识别文件装好了才显示
+  const film = h("button", { class: "icon-btn", type: "button", hidden: true, "aria-label": "发训练视频", title: "发训练视频", onclick: videoSheet }, icon("clapper", "sm"));
+  poseReady().then((p) => { film.hidden = !p.available; });
   const facts = h("div", { class: "who-facts" });
   // 顶上的 IronM 卡片和消息一起滚，往下翻就滚走，不钉在顶上（§209 需求 5）；输入框照旧在底下
   const scroll = h("div", { class: "chat-scroll" },
     h("div", { class: "chat-bar buddy-card" },
       mech(40),
       h("div", { class: "who" }, h("b", {}, "IronM"), h("span", {}, "陪你练、帮你记"), facts),
-      h("div", { class: "chat-tools" }, past, fresh)),
+      h("div", { class: "chat-tools" }, film, past, fresh)),
     thread);
   view.append(h("div", { class: "chat" }, scroll, files, voiceBar, form));
   buddyFacts(facts);
@@ -5074,7 +5226,8 @@ function paragraphs(text) {
 
 function msgView(msg) {
   const at = msg.at ? h("time", { class: "msg-time", datetime: msg.at }, sessionTime(msg.at)) : null; // 提问和回答的时间（§50）
-  if (msg.role === "user") return h("div", { class: "msg-user" }, msg.text,
+  const vc = msg.role === "user" ? videoCard(msg.text) : null;  // 训练视频分析（§224）显示成卡片
+  if (msg.role === "user") return h("div", { class: "msg-user" }, vc ? [vc.card, vc.rest] : msg.text,
     (msg.files || []).length ? h("div", { class: "msg-files" }, msg.files.map((n) => h("span", {}, icon("file", "xs"), n))) : null, at);
   const running = !msg.done;
   // 只有一个搭子（§121）：过程里只说搭子在做什么，不再按专业角色计数
@@ -5471,6 +5624,26 @@ let liveNow = null;  // 进行中的训练（有就显示"继续训练"）
 let liveTick = null;
 let liveBack = "home";
 const liveSound = { on: true };
+// 摄像头看动作（§218）：这一期只看深蹲类；识别文件装好了才显示开关。语音三档只记在这次打开的页面里（浏览器只存登录凭证）
+// 和 formcheck.js 的 MOVES 一致（§219：再加俯卧撑、硬拉、分腿蹲、臀桥、平板支撑、推举、平举）
+const CAM_MOVES = new Set(["自重深蹲", "高脚杯深蹲", "箱式深蹲", "杠铃深蹲", "俯卧撑", "窄距俯卧撑", "上斜俯卧撑", "下斜俯卧撑",
+  "罗马尼亚硬拉", "杠铃硬拉", "后撤弓步", "原地分腿蹲", "保加利亚分腿蹲", "臀桥", "哑铃臀推", "单腿臀桥", "平板支撑",
+  "哑铃推举", "杠铃站姿推举", "侧平举", "哑铃前平举",
+  // §220：照现有规则再扩 12 个
+  "杠铃前蹲", "相扑深蹲", "深蹲跳", "跪姿俯卧撑", "六角杠硬拉", "架上硬拉", "壶铃相扑硬拉", "杠铃早安式", "侧平板支撑", "阿诺德推举",
+  "拇指朝上斜前举", "哑铃耸肩",
+  // §221：第二批，再加九类 18 个
+  "哑铃弯举", "锤式弯举", "杠铃弯举", "佐特曼弯举", "杠铃反握弯举", "凳上臂屈伸", "双杠臂屈伸", "哑铃颈后臂屈伸",
+  "引体向上", "反手引体向上", "器械辅助引体向上", "反向划船", "开合跳", "星形跳", "提踵", "哥萨克深蹲", "哑铃侧弓步", "仰卧举腿",
+  // §222：第三批，再加九类 20 个
+  "哑铃卧推", "杠铃卧推", "上斜哑铃卧推", "上斜杠铃卧推", "下斜杠铃卧推", "窄距杠铃卧推", "哑铃地板卧推", "哑铃对握卧推",
+  "单臂哑铃划船", "杠铃俯身划船", "T 杠划船", "俯卧上斜哑铃划船", "杠铃彭德雷划船", "壶铃摇摆", "单腿罗马尼亚硬拉", "悬垂举腿",
+  "哑铃直立划船", "俯身哑铃反向飞鸟", "哑铃俯身臂屈伸", "仰卧曲杆臂屈伸"]);
+const liveCam = { mode: "cue", info: null };
+async function poseReady() {
+  if (!liveCam.info) liveCam.info = await api("/iron/api/pose").catch(() => ({ available: false, mb: 0 }));
+  return liveCam.info;
+}
 async function checkLive() {
   try { liveNow = (await api("/iron/api/live")).live; } catch { liveNow = null; }
   return liveNow;
@@ -5528,7 +5701,7 @@ async function livePage(view) {
   }
   const L = data.live;
   const steps = data.steps || {};
-  const [lib, tr] = await Promise.all([exercises().catch(() => null), api("/iron/api/training").catch(() => null)]);
+  const [lib, tr, pose] = await Promise.all([exercises().catch(() => null), api("/iron/api/training").catch(() => null), poseReady()]);
   const bestKg = Object.fromEntries(prWall(tr?.workouts || []).map((x) => [x.name, x.best.weight_kg]));  // 最近 30 天最好的一组的重量（§175 照参照图）
   const prog = h("div", { class: "live-prog" });
   let warn = null;  // 页面内提示 {i, text, back}：超上限可以确定或改回，空的一组提醒先填
@@ -5674,6 +5847,76 @@ async function livePage(view) {
     });
     return el;
   };
+  // 摄像头看动作（§218）：盖在训练页上的全屏面板。数到的次数填进当前这一组，点"完成这组"照常打勾、开始休息
+  let cam = null;  // {el, i, restEl, coach}
+  const closeCam = () => {
+    if (!cam) return;
+    cam.coach?.stop(); cam.el.remove(); document.body.classList.remove("fc-on");
+    window.removeEventListener("hashchange", closeCam);
+    cam = null;
+  };
+  const openCam = async (i) => {
+    closeCam();
+    const it = L.items[i], hold = Boolean(it.timed);  // 计时动作（平板支撑）数秒、填秒数
+    const video = h("video", { playsinline: "", muted: "" }), canvas = h("canvas");
+    const count = h("b", { class: "num" }, "0");
+    const cue = h("div", { class: "fc-cue", hidden: true });
+    const statusEl = h("div", { class: "fc-status", role: "status" }, "正在加载识别…");
+    const fps = h("span", { class: "fc-fps" });
+    const restEl = h("div", { class: "fc-rest" });
+    const seg = h("div", { class: "fc-seg", role: "group", "aria-label": "语音提示" });
+    const drawSeg = () => seg.replaceChildren(...[["mute", "静音"], ["count", "只报数"], ["cue", "报数加提醒"]].map(([k, t]) =>
+      h("button", { type: "button", class: liveCam.mode === k ? "on" : "", "aria-pressed": String(liveCam.mode === k),
+        onclick: () => { liveCam.mode = k; if (cam?.coach) cam.coach.voice.mode = k; drawSeg(); } }, t)));
+    drawSeg();
+    const doneBtn = h("button", { class: "btn block fc-done", type: "button", onclick: () => doneSet() }, icon("check", "sm"), "完成这组");
+    const el = h("div", { class: "fc", role: "dialog", "aria-label": `摄像头看动作：${it.exercise}` },
+      h("div", { class: "fc-top" }, h("button", { class: "icon-btn", type: "button", "aria-label": "关掉摄像头", onclick: closeCam }, icon("x", "sm")),
+        h("b", {}, it.exercise), fps),
+      h("div", { class: "fc-stage" }, video, canvas, h("div", { class: "fc-big" }, count, h("small", {}, hold ? "秒" : "个")), cue),
+      statusEl, restEl, seg, doneBtn,
+      h("p", { class: "fc-note" }, "画面只在这台设备上处理，不上传"));
+    document.body.append(el); document.body.classList.add("fc-on");
+    cam = { el, i, restEl, coach: null };
+    window.addEventListener("hashchange", closeCam);
+    let cueT = null, words = {};
+    const showCue = (text, bad) => {
+      cue.textContent = text; cue.className = `fc-cue ${bad ? "bad" : "ok"}`; cue.hidden = false;
+      clearTimeout(cueT); cueT = setTimeout(() => { cue.hidden = true; }, 1800);
+    };
+    const doneSet = () => {
+      const here = curPos();
+      if (!here || here.i !== i) { closeCam(); return; }
+      const n = cam?.coach ? cam.coach.finishSet() : 0;
+      if (n) setVal(i, here.j, hold ? "seconds" : "reps", n);
+      markDone(i, here.j);  // 次数还是空的会照常提示先填
+      count.textContent = "0";
+      const next = curPos();
+      if (!next || next.i !== i) { statusEl.textContent = "这个动作做完了，可以关掉摄像头"; doneBtn.hidden = true; }
+      else if (next.j !== here.j) statusEl.textContent = `第 ${here.j + 1} 组记好了，休息完接着做`;
+    };
+    try {
+      const { startCoach, RULES } = await import("/iron/formcheck.js");
+      words = Object.fromEntries(RULES.map((r) => [r.id, r.cue]));
+      const coach = await startCoach({ video, canvas, move: it.exercise, src: window.__fcSrc || null, on: {  // __fcSrc：自测时拿一段视频代替摄像头
+        status: (t) => { statusEl.textContent = t; },
+        fps: (n) => { fps.textContent = `${n} 帧/秒`; },
+        event: (e) => {
+          if (e.type === "rep") { count.textContent = String(e.n); showCue(e.faults.length ? words[e.faults[0]] : `第 ${e.n} 个`, e.faults.length > 0); }
+          else if (e.type === "cue") showCue(words[e.id], true);
+          else if (e.type === "tick") count.textContent = String(e.seconds);
+          else if (e.type === "set") {
+            const here = curPos();
+            if (here && here.i === i) setVal(i, here.j, hold ? "seconds" : "reps", hold ? e.seconds : e.reps);
+            count.textContent = "0";
+            statusEl.textContent = `${e.text}。${hold ? "秒数" : "次数"}填好了，没问题点「完成这组」`;
+          }
+        } } });
+      if (cam?.el !== el) { coach.stop(); return; }  // 加载时已经关掉了
+      coach.voice.mode = liveCam.mode;
+      cam.coach = coach;
+    } catch (err) { statusEl.textContent = err.message || "摄像头没打开"; statusEl.classList.add("error"); }
+  };
   // 当前这一组（§104 需求 6）：动作图、一句要点、− / + 一档、一个大按钮
   const stepper = (label, value, unit, onDown, onUp, hot, pill = null, edit = null) => h("div", { class: "stepper" },
     h("div", { class: "step-label" }, h("span", {}, label), pill),
@@ -5699,6 +5942,10 @@ async function livePage(view) {
         stepper("次数", s.reps, "次", () => bump(i, j, "reps", -1), () => bump(i, j, "reps", 1), false,
           target ? h("span", { class: "tag" }, target) : null,
           { range: { max: 100 }, set: (v) => setVal(i, j, "reps", v) })),
+      pose.available && CAM_MOVES.has(it.exercise)  // 平板支撑这种计时的也能看（§219）
+        ? h("button", { class: "btn ghost block fc-open", type: "button", onclick: () => openCam(i) }, icon("camera", "sm"), "摄像头看动作",
+          h("small", {}, `首次加载约 ${Math.round(pose.mb)} MB`))
+        : null,
       warn && warn.i === i ? h("div", { class: "lf-warn", role: "status" }, h("span", {}, warn.text),
         warn.back != null ? h("button", { class: "btn small warn-ok", type: "button", onclick: () => { okKg[i] = warn.w; warn = null; draw(); } }, "确定") : null,
         warn.back != null ? h("button", { class: "link warn-back", type: "button", onclick: () => { s.weight_kg = warn.back; warn = null; save(); draw(); } }, `改回 ${warn.back}`) : null) : null,
@@ -5727,6 +5974,7 @@ async function livePage(view) {
   };
   const tick = () => {
     total.textContent = clock((Date.now() - t0) / 1000);
+    if (cam) cam.restEl.textContent = rest ? `组间休息 ${clock((rest.end - Date.now()) / 1000)}` : "";
     const run = list.querySelector('[data-run="1"]');
     if (run && timing) run.textContent = clock((Date.now() - timing.from) / 1000);
     if (rest) {

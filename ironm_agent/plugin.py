@@ -196,6 +196,7 @@ from ironm_agent.training import (
     weekday_name,
 )
 from ironm_agent.triggers import PainStore, default_pain
+from ironm_agent.video_check import video_note
 from ironm_agent.weather import Weather
 from ironm_agent.weather import case_line as weather_line
 from ironm_agent.weather import for_user as weather_for
@@ -1715,7 +1716,7 @@ class IronMAgent:
             if confirmed_now else "",
             PREVIEWED_NOTE if previewed_now else "",
             f"他这句话说这些天没空：{busy}。挪训练不要挪到这些天。" if busy else "",
-            files.note_for_experts(), checked_note,
+            files.note_for_experts(), video_note(text), checked_note,  # 训练视频分析（§224）
             special_rules(special_flags(snapshot.profile, case.risks, snapshot.today)),
             f"他问的里面有你不能做的（诊断、开药改药、治疗方案、替他叫急救）。开头用一句自己的话说明这部分不能做、"
             f"该找谁，意思是：{refused} 再说能帮他做的部分。" if refused else "",

@@ -80,3 +80,7 @@ SOFTWARE.
 ## PyAV 和它带的 FFmpeg 库（视频转文字，spec §200）
 
 从视频里取声音用 PyAV（https://github.com/PyAV-Org/PyAV ，BSD 3-Clause License）。它的安装包自带 FFmpeg 的库（https://ffmpeg.org ，LGPL 2.1 或以后版本），按 LGPL 以动态库的形式使用、没有改动；源码和许可见上面两个项目。
+
+## 动作识别（MediaPipe 姿态识别）
+
+训练中"摄像头看动作"用 Google 的 MediaPipe 姿态识别（https://github.com/google-ai-edge/mediapipe）：识别程序和引擎来自 npm 包 `@mediapipe/tasks-vision` 1.2.2，模型是 `pose_landmarker_lite`（第 1 版）。都按 Apache License 2.0 发布（https://www.apache.org/licenses/LICENSE-2.0），按原样使用、没有改动。文件由 `scripts/fetch_pose_model.py` 下载到服务器的数据目录，不放进仓库；识别在用户自己的设备上进行，画面不上传。

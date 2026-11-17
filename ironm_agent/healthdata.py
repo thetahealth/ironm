@@ -89,6 +89,18 @@ async def _series(svc: Any, who: Mapping[str, str], name: str, start: date, end:
     return _points(envelope, scale)
 
 
+async def _sleep_series(svc: Any, who: Mapping[str, str], name: str, start: date, end: date) -> tuple[Point, ...]:
+    """睡眠按醒来那天算（§225）：mirobody 把晚上 6 点起算的睡眠记在入睡那晚（local_date），手表 App 和
+    用户说的"今天睡了几小时"是醒来那天，按它的 display_day 换过来（按天汇总的，窗口 00:00，它原样返回）。
+    入睡那晚是查询条件里的日期，所以往前多查一天，换完再去掉超出范围的。"""
+    from mirobody.kernel.series import display_day
+    from mirobody.translate.local_day import window_for
+
+    window = window_for(name.split(".")[0])
+    points = await _series(svc, who, name, start - timedelta(days=1), end, _TO_HOURS)
+    return tuple((day, v) for d, v in points if start <= (day := display_day(d, window)) <= end)
+
+
 async def _height_cm(svc: Any, who: Mapping[str, str]) -> float | None:
     envelope = await svc.envelope(who, indicators=["heights"], view="latest")
     for row in getattr(envelope, "data", None) or []:
@@ -235,7 +247,7 @@ async def read_all(
         got["weight"] = tuple(sorted({**dict(got["weight"]), **dict(mine)}.items()))
     sleep_names = candidates(catalog, SLEEP)
     sleep_parts = await asyncio.gather(
-        *(_series(svc, who, n, start, today, _TO_HOURS) for n in sleep_names),
+        *(_sleep_series(svc, who, n, start, today) for n in sleep_names),
         return_exceptions=True,
     )
     sleep = merge([x for x in sleep_parts if not isinstance(x, BaseException)])
