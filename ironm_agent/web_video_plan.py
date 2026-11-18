@@ -19,7 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from ironm_agent import video_plan
-from ironm_agent.web_video import KIND, PLAN_KIND, STORE, _alive
+from ironm_agent.notices import notify
+from ironm_agent.web_video import KIND, PLAN_KIND, PLANS_LINK, STORE, _alive
 from ironm_agent.web_voice import _verify
 
 _log = logging.getLogger("ironm_agent.video_plan")
@@ -103,8 +104,8 @@ async def _strength(user_id: str, training: Any, k: int = 8) -> str:
     except Exception:
         return ""
     best: dict[str, tuple[float, float, int]] = {}
-    for w in logs:
-        for it in w.items:
+    for w in logs:  # workouts() 返回的是 StoredLog（编号、记录、保存时间），动作在里面那层（§226）
+        for it in w.log.items:
             for st in it.done_sets or []:
                 if st.weight_kg and st.reps and 1 <= st.reps <= 20:
                     e = epley(st.weight_kg, st.reps)
@@ -123,15 +124,18 @@ async def _run(user_id: str, job: dict[str, Any], llm: Any, sentences: list[Any]
         if out.get("status") == "failed":
             job.update(state="failed", error=out.get("reason") or "这次没整理出来，可以再生成一次")
             _log.info("video plan failed: tries=%s", out.get("tries"))
+            await notify(user_id, "video_plan", "视频方案没生成出来", job["error"], level="warn", link=PLANS_LINK)  # §235
             return
         out["created"] = datetime.now(UTC).isoformat(timespec="seconds")
         await store.put(user_id, PLAN_KIND, job["id"], {"id": job["id"], **out})
         _jobs.pop(user_id, None)
         _log.info("video plan done: status=%s tries=%s ms=%s adapted=%s",
                   out.get("status"), out.get("tries"), out.get("ms"), "adapted" in out)  # fmt: skip
+        await notify(user_id, "video_plan", "视频方案生成好了", "原版和按你改过的都在，去看看要不要存", link=PLANS_LINK)
     except Exception as e:
         job.update(state="failed", error="这次没能调用你的模型，稍后再试")
         _log.warning("video plan error: error_type=%s", type(e).__name__)
+        await notify(user_id, "video_plan", "视频方案没生成出来", "这次没能调用你的模型，稍后再试", level="warn", link=PLANS_LINK)
 
 
 @router.post("/iron/api/video-text/{item_id}/plan")
@@ -185,7 +189,18 @@ def _marked(title: str, mark: str) -> str:
 @router.post("/iron/api/video-text/{item_id}/plan/save")
 async def save_plan(item_id: str, choice: Choice, user_id: str = Depends(_verify()), store: Any = STORE) -> dict[str, Any]:
     """存选中的进"我的方案"（都不选就是"都不要了"），然后删掉这段文字和结果。"""
-    from ironm_agent.mine import MOVE, PLAN, LimitError, MyMove, MyPlan, check_move, check_plan, check_room, load, new_id
+    from ironm_agent.mine import (
+        MOVE,
+        PLAN,
+        LimitError,
+        MyMove,
+        MyPlan,
+        check_move,
+        check_plan,
+        check_room,
+        load,
+        new_id,
+    )
     from ironm_agent.training import Plan
 
     got = await store.get(user_id, PLAN_KIND, item_id)

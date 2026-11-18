@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ironm_agent.ddl import run_ddl
 from ironm_agent.exercises import library
 from ironm_agent.progression import Decided, coach_target, history
+from ironm_agent.start_weight import needs_weight, start_of
 from ironm_agent.training import LogItem, Plan, SetDone, WorkoutLog
 
 IDLE = timedelta(hours=6)
@@ -52,6 +53,7 @@ class LiveItem(BaseModel):
     )  # 开始时预填的重量（计划目标或上次的），训练中自己调的上下限按它算（§104）
     sets: list[LiveSet] = Field(default_factory=list, max_length=20)
     cardio: bool = False  # 有氧：一段一行只记时长（页面填分钟，存秒）（§130）
+    tip: str = Field(default="", max_length=40)  # 没记过重量的动作：怎么试出重量的一句话（§229）
 
 
 class Live(BaseModel):
@@ -260,8 +262,11 @@ def new_item(
                        seconds=x.seconds if timed else None) for x in last[0][1][:20]]  # fmt: skip
         k = max(1, min(n, 20)) if planned is not None else len(was)
         sets = [(was[i] if i < len(was) else was[-1]).model_copy() for i in range(k)]
+    tip = ""
+    if not timed and sets[0].weight_kg is None and needs_weight(name, planned.reps if planned else None):
+        tip = start_of(name, logs, date.today()).hint  # 没记过重量：第一次试出来记下（§229）
     return LiveItem(exercise=name, timed=timed, rest=rest_of(name, rests), target=target[:40],
-                    best=best_e1rm(name, logs), plan_kg=sets[0].weight_kg, sets=sets)  # fmt: skip
+                    best=best_e1rm(name, logs), plan_kg=sets[0].weight_kg, sets=sets, tip=tip)  # fmt: skip
 
 
 def _e1rm(weight: float | None, reps: int | None) -> float | None:

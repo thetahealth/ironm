@@ -22,8 +22,9 @@ SCHEMA: dict[str, Any] = {
     "function": {
         "name": "timeline",
         "description": (
-            "查这个人最近一段时间发生了什么：生病和好了、伤病和近期的事、说疼的部位、训练记录、管家做过的调整（原因和效果）。"
-            '回答"上周为什么给我减量了""这个月怎么样""最近发生了什么"时用。'
+            "查这个人最近一段时间发生了什么：生病和好了、伤病和近期的事、说疼的部位、训练记录、管家做过的调整（原因和效果）、"
+            "计划哪天换的、改过什么。"
+            '回答"上周为什么给我减量了""这个月怎么样""最近发生了什么""我的计划上次什么时候改的"时用。'
         ),
         "parameters": {
             "type": "object",
@@ -57,8 +58,9 @@ def build(
     pains: Sequence[tuple[str, date]] = (),
     workouts: Sequence[Any] = (),
     changes: Sequence[Any] = (),
+    plans: Sequence[tuple[date, str]] = (),
 ) -> list[str]:
-    """按日期排好的时间线（新的在后）。"""
+    """按日期排好的时间线（新的在后）。plans 是计划的改动（哪天、换了还是改了什么，§230）。"""
     start = today - timedelta(days=days - 1)
     from ironm_agent.latest import shadowed
 
@@ -104,6 +106,7 @@ def build(
         why = f"（原因：{c.why}）" if c.why else ""
         effect = f"；效果：{c.outcome}" if c.outcome else ""
         rows.append((c.day, 4, f"管家：{c.after}{why}{effect}"))
+    rows += [(d, 5, text) for d, text in plans if start <= d <= today]
     rows.sort(key=lambda r: (r[0], r[1]))
     lines = [f"{_md(d)} {text}" for d, _, text in rows][-MAX_LINES:]
     return lines
@@ -117,6 +120,7 @@ def tool(
     pains: Callable[[date], Awaitable[Sequence[tuple[str, date]]]] | None = None,
     workouts: Callable[[date], Awaitable[Sequence[Any]]] | None = None,
     changes: Callable[[], Awaitable[Sequence[Any]]] | None = None,
+    plans: Callable[[], Awaitable[Sequence[tuple[date, str]]]] | None = None,
 ) -> Any:
     """给管家的时间线工具（只读）。"""
 
@@ -133,6 +137,7 @@ def tool(
             pains=(await _safely("pain", pains(start)) if pains else None) or (),
             workouts=(await _safely("workouts", workouts(start)) if workouts else None) or (),
             changes=(await _safely("coach", changes()) if changes else None) or (),
+            plans=(await _safely("plans", plans()) if plans else None) or (),
         )  # fmt: skip
         _log.info("timeline: days=%d lines=%d", days, len(lines))
         if not lines:

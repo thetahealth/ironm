@@ -685,6 +685,36 @@ class IronMAgent:
             self._training = default_training()
         return self._training
 
+    async def _plan_history_lines(self, user_id: str, today: date) -> list[str]:
+        """档案里计划的时间（§230）：从哪天开始用、改过几次、最近一次是哪天。没有计划、读不到历史时不写。"""
+        from ironm_agent.plan_history import history_line
+
+        store = self._training_store()
+        try:
+            current = await store.plan(user_id)
+            if current is None:
+                return []
+            line = history_line(await store.plans(user_id), current, today)
+        except Exception as e:
+            _log.warning("plan history unavailable: error_type=%s", type(e).__name__)
+            return []
+        return [line] if line else []
+
+    async def _trial_lines(
+        self, user_id: str, plan: Plan | None, recent: list[WorkoutLog], today: date
+    ) -> list[str]:
+        """计划里还没有重量记录的动作（§229）。最近两周的记录里都有重量就不多读；有缺的再往回读 180 天核对。"""
+        from ironm_agent.start_weight import LOOKBACK_DAYS, trial_lines
+
+        if not trial_lines(plan, recent, today):
+            return []
+        try:
+            older = await self._training_store().workouts(user_id, today - timedelta(days=LOOKBACK_DAYS))
+        except Exception as e:  # 读不到更早的：不说，免得把练过的动作说成没记录
+            _log.warning("older workouts unavailable: error_type=%s", type(e).__name__)
+            return []
+        return trial_lines(plan, [x.log for x in older], today)
+
     async def _read_training(
         self, user_id: str, today: date
     ) -> tuple[Plan | None, list[WorkoutLog], date | None]:
@@ -1344,9 +1374,16 @@ class IronMAgent:
         async def changes() -> list[Any]:
             return list(await (self._coach_store or default_coach_store()).history(user_id, 200))
 
+        async def plans() -> list[tuple[date, str]]:  # 计划哪天换的、改过什么（§230）
+            from ironm_agent.plan_history import events
+
+            store = self._training_store()
+            current = await store.plan(user_id)
+            return events(await store.plans(user_id), current) if current is not None else []
+
         run = timeline.tool(today, illness=lambda s: self._illness_store().since(user_id, s),
                             memory=raw, pains=lambda s: self._pain_store().since(user_id, s),
-                            workouts=workouts, changes=changes)  # fmt: skip
+                            workouts=workouts, changes=changes, plans=plans)  # fmt: skip
         return {timeline.SCHEMA["function"]["name"]: (timeline.SCHEMA, run)}
 
     def _weather_tool(self, user_id: str) -> dict[str, Any]:
@@ -2763,6 +2800,8 @@ class IronMAgent:
         snapshot, (plan, logs, since) = await snap, await train
         ill: list[Episode] = list((run or {}).get("_ill") or [])
         lines = case_lines(plan, logs, snapshot.today, since)
+        if plan is not None:  # 紧跟在"当前计划"后面：从哪天开始用、改过几次（§230）
+            lines[1:1] = await self._plan_history_lines(user_id, snapshot.today)
         from ironm_agent.plan_layers import load as load_temps
 
         lines += [f"临时调整（他确认过的，到期回到原计划）：{t.line()}"
@@ -2782,7 +2821,9 @@ class IronMAgent:
         decided = coach.decided() if coach is not None else None
         target = await self._target(user_id, snapshot)  # 目标体重和日期：档案里目标一行带上（§151）
         case = build_case(
-            snapshot, recall, text, plan=lines + target_lines(plan, steady, snapshot.today, decided),
+            snapshot, recall, text,
+            plan=lines + target_lines(plan, steady, snapshot.today, decided)
+            + await self._trial_lines(user_id, plan, logs, snapshot.today),
             illness=state, day=today_lines,
             insights=insight_lines, target=target, sore=sore_parts,
             meals=await self._meals_line(user_id, snapshot), diet_plan=await self._diet_plan_line(user_id),

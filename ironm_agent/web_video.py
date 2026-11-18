@@ -21,8 +21,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from ironm_agent import asr, video_text
+from ironm_agent.notices import notify
 from ironm_agent.web_voice import _verify
 
+PLANS_LINK = "#atlas/plans"  # 消息点了去哪：图鉴的方案页（跟着博主练在那）
 _log = logging.getLogger("ironm_agent.video_text")
 router: APIRouter = APIRouter()
 KIND = "videotext"
@@ -107,12 +109,16 @@ async def _run(user_id: str, job: dict[str, Any], work: Path, store: Any) -> Non
             "video text done: seconds=%d sentences=%d ms=%d",
             out["seconds"], len(out["sentences"]), out["ms"],
         )  # fmt: skip
+        # 离开了页面也看得到结果：写一条系统消息（§235）
+        await notify(user_id, "video_text", "视频转成文字了", f"「{job['name']}」可以生成方案了", link=PLANS_LINK)
     except video_text.VideoError as e:
         job.update(state="failed", error=str(e))
         _log.info("video text refused: reason=%s", type(e).__name__)
+        await notify(user_id, "video_text", "视频没转成文字", str(e), level="warn", link=PLANS_LINK)
     except Exception as e:
         job.update(state="failed", error="这次没转成，稍后再传一次")
         _log.warning("video text failed: error_type=%s", type(e).__name__)
+        await notify(user_id, "video_text", "视频没转成文字", "这次没转成，稍后再传一次", level="warn", link=PLANS_LINK)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

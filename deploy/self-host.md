@@ -54,7 +54,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## 3. 拿代码
 
 ```bash
-git clone https://github.com/thetahealth/mirobody-ironm.git iron-m
+git clone https://github.com/thetahealth/ironm.git iron-m
 cd iron-m
 ```
 
@@ -143,7 +143,7 @@ docker compose version
 ### 2. 拿代码
 
 ```bash
-git clone https://github.com/thetahealth/mirobody-ironm.git iron-m
+git clone https://github.com/thetahealth/ironm.git iron-m
 cd iron-m
 ```
 

@@ -595,8 +595,12 @@ async def get_training(
 ) -> dict[str, Any]:
     today = date.today()
     plan = await store.plan(user_id)
-    logs = await store.workouts(user_id, today - timedelta(days=42))
+    from ironm_agent.start_weight import LOOKBACK_DAYS, starts
+
+    older = await store.workouts(user_id, today - timedelta(days=LOOKBACK_DAYS))  # 重量往回多看一些（§229）
+    logs = [x for x in older if (today - x.log.day).days <= 42]  # 下次目标照旧只看最近 6 周
     found = targets(plan.plan if plan else None, [x.log for x in logs], await _decided(user_id))
+    weights = starts(plan.plan if plan else None, [x.log for x in older], found, today)
     shown = [x for x in reversed(logs) if (today - x.log.day).days <= 30]
     try:  # 哪些打卡带了照片（§117）；读不到当作都没有
         with_photo = await photos.having(user_id, [x.id for x in shown])
@@ -618,6 +622,8 @@ async def get_training(
             }
             for k, t in found.items()
         },
+        # 每个要用重量的动作：有记录的是多重，没记录的标"试重量"（§229）
+        "weights": {k: v.json() for k, v in weights.items()},
         "workouts": [
             {
                 "id": x.id,
@@ -798,6 +804,11 @@ router.include_router(_voice)
 from ironm_agent.web_mine import router as _mine  # noqa: E402
 
 router.include_router(_mine)
+
+# 消息：管家消息和系统消息（spec [2026-10-23] §235）
+from ironm_agent.web_messages import router as _messages  # noqa: E402
+
+router.include_router(_messages)
 
 # 视频出方案第一步：视频转文字（spec [2026-10-23] §200）
 from ironm_agent.web_video import router as _video  # noqa: E402

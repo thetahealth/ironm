@@ -37,6 +37,7 @@ from ironm_agent.coach_state import (
     evaluate,
     expiry,
     hanging_lines,
+    kcal_applied,
     refusals,
     state_lock,
 )
@@ -350,6 +351,11 @@ async def _run(user_id: str, deps: Deps, llm: LLM, *, today: date, force: bool, 
         review.failed = review.today() is None  # 没就今天做出决定：显示"管家出错了"，能重试
         if review.failed:
             review.failed_at = datetime.now(UTC)
+            from ironm_agent.notices import notify
+
+            # 系统消息（§235）：同一天只记一条，重试再失败不重复
+            await notify(user_id, "coach_failed", "IronM 今天没看成", "你的模型没调通，今天先按原计划；可以在首页点重试",
+                         level="warn", link="#home", key=f"coach-failed-{today.isoformat()}")  # fmt: skip
     if raw is not None:
         review.summary = str(raw.get("summary") or "")[:120]
         if staging:
@@ -406,19 +412,20 @@ async def _call(
     first = (
         next((d for d in review.done if d.key == "review:kcal" and not d.undone), None) if kind == "kcal" else None
     )
-    if first is not None:  # 同一轮第二次调热量：先撤掉第一次，撤销时才回得到原样（审查 11-03）
+    took = first is not None and kcal_applied(first)  # 旧数据里当场生效过的；§238 起只是建议，没生效不用撤
+    if took:  # 同一轮第二次调热量：先撤掉第一次，撤销时才回得到原样（审查 11-03）
         await deps.diet.undo(user_id)
     try:
         done = await _apply(user_id, deps, inp, a, fs, blocked, today)
     except Exception:
         done = None
-        if first is not None:  # 写库出错：第一次补回去，记录和库保持一致（复核 11-03）
+        if took and first is not None:  # 写库出错：第一次补回去，记录和库保持一致（复核 11-03）
             await deps.diet.apply(
                 user_id,
                 KcalAdjust(int(first.value.get("after") or 0), today, first.why or "管家复盘"),
             )
         raise
-    if done is None and first is not None:  # 第二次没通过：第一次照旧
+    if done is None and took and first is not None:  # 第二次没通过：第一次照旧
         await deps.diet.apply(
             user_id, KcalAdjust(int(first.value.get("after") or 0), today, first.why or "管家复盘")
         )
@@ -678,10 +685,10 @@ async def _kcal(
         note = f"（累计最多调 {MAX_TOTAL} 千卡，只调到 {prop.after} 千卡）"
     elif abs(want) > MAX_STEP:
         note = f"（一次最多调 {MAX_STEP} 千卡）"
-    await deps.diet.apply(user_id, KcalAdjust(kcal=prop.total, since=today, reason=why or "管家复盘"))
-    title = f"每日热量目标{'加' if prop.delta > 0 else '减'} {abs(prop.delta)} 千卡，约 {prop.after} 千卡{note}"
+    # §238：只提建议，他确认了才生效（confirm_kcal）；这里不写热量
+    title = f"建议每日热量目标{'加' if prop.delta > 0 else '减'} {abs(prop.delta)} 千卡，约 {prop.after} 千卡{note}"
     return Done(key="review:kcal", type="kcal", title=title, why=why, basis=basis, expect=expect,
-                value={"before": before, "after": prop.total})  # fmt: skip
+                value={"before": before, "after": prop.total, "pending": True})  # fmt: skip
 
 
 async def _save(user_id: str, deps: Deps, review: Review, today: date) -> None:
@@ -810,10 +817,37 @@ async def _undo(user_id: str, deps: Deps, key: str, today: date, refuse: bool = 
             await deps.training.cancel(user_id, draft.id)
         elif await deps.training.undo(user_id, draft.id) is None:
             return None
-    if done.type == "kcal":
+    if done.type == "kcal" and kcal_applied(done):  # 没确认过的建议没生效：拒绝时不去撤别的调整（§238）
         await deps.diet.undo(user_id)
     await _declined(user_id, deps, state, review, done, today, refuse)
     return done
+
+
+async def confirm_kcal(user_id: str, deps: Deps, key: str = "review:kcal", today: date | None = None) -> Done | None:
+    """他确认了热量建议（§238）：这时才写热量调整，并把这条记成已生效（之后能"不用这样调"撤回）。
+    没有等确认的热量建议时返回 None。"""
+    today = today or date.today()
+    async with state_lock(user_id):
+        state = await deps.store.get(user_id)
+        if state is None:
+            return None
+        review = state.review if state.review is not None and state.review.day == today else None
+        mine = [d for d in review.done if not d.undone] if review is not None else []
+        done = next((d for d in [*mine, *carry(state, today)] if d.key == key and d.type == "kcal" and not kcal_applied(d)), None)
+        if done is None:
+            return None
+        await deps.diet.apply(user_id, KcalAdjust(int(done.value.get("after") or 0), today, done.why or "管家复盘"))
+        took = done.model_copy(update={"value": {**done.value, "applied": True}})
+        update: dict[str, Any] = {}
+        if review is not None and any(d is done for d in review.done):
+            update["review"] = review.model_copy(update={"done": [took if d is done else d for d in review.done]})
+        else:  # 前几天提的、还挂着的：挂着的那份换成已生效的
+            update["carried"] = [took if d.key == key else d for d in carry(state, today)]
+            update["review"] = review
+        await deps.store.save(user_id, state.model_copy(update=update), [])
+        _log.info("review kcal confirmed")
+    await evaluate(user_id, deps, reason="确认热量调整", today=today)
+    return took
 
 
 async def _declined(

@@ -1517,6 +1517,14 @@ async def coach_decide(body: CoachDecision, user_id: str = Depends(_verify())) -
     item = await decide(deps.store, user_id, body.key, body.decision)
     if item is None:
         raise HTTPException(404, "这条调整已经不需要处理了")
+    if body.decision == "accept" and item.value.get("type") == "kcal":  # 热量建议：确认了才生效（§238）
+        from ironm_agent.review import confirm_kcal
+
+        try:
+            await confirm_kcal(user_id, deps, body.key)
+        except Exception as e:
+            _log.error("kcal confirm failed: error_type=%s", type(e).__name__)
+            raise HTTPException(503, "热量这次没调成，稍后再点一次") from e
     return {"key": body.key, "decision": body.decision, "item": item.model_dump(mode="json")}
 
 

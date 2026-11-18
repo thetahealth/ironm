@@ -6,25 +6,31 @@
 
 **你的健身 AI 管家：练、吃、睡，它一起看，一起安排。**
 
+<a href="https://github.com/thetahealth/mirobody">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/powered-by-mirobody-zh-dark.svg">
+    <img src="docs/readme/powered-by-mirobody-zh.svg" width="560" alt="Powered by Mirobody：开源 AI 健康数据引擎">
+  </picture>
+</a>
+
 开源 · 打开网站就能用，也能自己部署 · 用你自己的大模型
 
 **👉 现在就试：<https://test-ironm.mirobody.ai>**（不用安装，手机浏览器也能用）
 
 [English](README.md) · **简体中文**
 
-[![Stars](https://img.shields.io/github/stars/thetahealth/mirobody-ironm?style=flat&logo=github)](https://github.com/thetahealth/mirobody-ironm/stargazers)
-[![Last commit](https://img.shields.io/github/last-commit/thetahealth/mirobody-ironm)](https://github.com/thetahealth/mirobody-ironm/commits/main)
+[![Stars](https://img.shields.io/github/stars/thetahealth/ironm?style=flat&logo=github)](https://github.com/thetahealth/ironm/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/thetahealth/ironm)](https://github.com/thetahealth/ironm/commits/main)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.13-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-compose-2496ED.svg?logo=docker&logoColor=white)
-[![Built on mirobody](https://img.shields.io/badge/built%20on-mirobody-6f42c1.svg)](https://github.com/thetahealth/mirobody)
 
 [功能](#-能做什么) · [截图](#-截图) · [开始用](#-快速开始) · [常见问题](#-常见问题)
 
-<img src="docs/readme/live.png" width="190" alt="训练记录器" />
-<img src="docs/readme/diet-library.png" width="190" alt="饮食方案库" />
-<img src="docs/readme/diet-plan.png" width="190" alt="饮食方案详情" />
-<img src="docs/readme/atlas-moves.png" width="190" alt="动作图鉴" />
+<img src="docs/readme/home.png" width="190" alt="首页：今天练什么、每个动作该用多重" />
+<img src="docs/readme/plan.png" width="190" alt="训练计划：记过的写重量，没记过的试重量" />
+<img src="docs/readme/live.png" width="190" alt="训练记录器：摄像头看动作" />
+<img src="docs/readme/messages.png" width="190" alt="消息：IronM 的建议，确认才生效" />
 
 </div>
 
@@ -36,13 +42,15 @@
 
 这句话里，它用了你这几晚的睡眠、你平时睡多久、你的静息心率，还知道你今天排的是哪一练。训练 App 看不到你的睡眠，手环不知道你今天要练什么，通用 AI 每次都得你从头讲一遍。IronM 三样都看得到，答完还会顺手把今天的训练调成七成。
 
-## 🤔 为什么做 IronM
+## 🤔 IronM 是怎么来的
 
-练、吃、睡本来就是连着的。没睡好，今天该练轻点；练得狠，蛋白质得跟上；减脂期体重不动，先该看的是这几周练了多少、吃了多少，而不是闷头再少吃。
+**想练好，要管的不止训练。** 没睡好，今天该练轻点；练得狠，蛋白质得跟上；减脂期体重不动，先该看的是这几周练了多少、吃了多少，而不是闷头再少吃。
 
-可我们手里的工具是拆开的：训练 App 记组数，饮食 App 数卡路里，手环看睡眠。三边各说各的，最后还得自己在脑子里拼。
+**可数据散在各处。** 训练 App 记组数，饮食 App 数卡路里，手表看睡眠，化验单躺在相册里。每个工具只看自己那一块；去问 AI 教练，它不知道你昨晚只睡了 5 小时，只能给一份谁都适用的建议。
 
-IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训练、饮食、睡眠心率和化验单，记得你的伤病、器械和作息。排计划、调今天的量、定下次的重量、改热量，都是看过全部再定；每个改动先出一张预览卡片，你点确认才生效，反悔了也能撤销。
+**Mirobody 先把数据接到了一起。** [Mirobody](https://github.com/thetahealth/mirobody) 是开源、能自己部署的 AI 健康数据引擎：化验单、苹果健康、手表数据统一成一份标准的健康记录，每个数都能追到出处，AI 能直接读。
+
+**于是有了 IronM。** 我们在 Mirobody 上做了一个健身教练：它看得到你的训练、饮食、睡眠心率和化验单，记得你的伤病、器械和作息。排计划、调今天的量、定下次的重量、改热量，都是看过全部再定；每个改动先出一张预览卡片，你点确认才生效，反悔了也能撤销。
 
 ## 🔗 一起管，管住了什么
 
@@ -83,11 +91,13 @@ IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训�
 
 ### 🏋️ 训练
 - 🎬 **跟着博主练**：传一段博主讲训练的视频，先整理出博主原版（每个动作标出自第几秒、附原话，没说的写"没说"），再按你的器械、伤病和时间改一份；两份放一起给你看，存哪份你定
-- 📋 **方案打底**：24 份训练方案（入门全身、上下肢分化、推拉腿、五分化、在家哑铃、壶铃、自重进阶、臀腿、三大项、力量加跑步、停练回归、出差酒店、60 岁以上……），按你的水平、天数、器械、伤病和时间改成你自己的
+- 📷 **摄像头看动作**：训练时打开摄像头，在你自己的手机上认出 71 个动作、自动数次数，动作做到一半就用语音提醒塌腰、膝盖内扣这类问题；画面不上传
+- 🎥 **训练视频分析**：传一段自己练的视频，逐帧找出每一下的问题和在第几秒，再交给 IronM 点评怎么改；视频不上传
+- 📋 **按你的情况排计划**：没点名要哪套时，按你的水平、目标、每周天数、器械和伤病一步步算出一份（分化方式、每周组数、挑动作、次数、8 周阶段，每一步都写了为什么）；另有 24 份训练方案（入门全身、上下肢分化、推拉腿、五分化、在家哑铃、壶铃、自重进阶、臀腿、三大项、力量加跑步、停练回归、出差酒店、60 岁以上……），按你的水平、天数、器械、伤病和时间改成你自己的，点名要哪套就照哪套
 - 🌅 **每天看一眼**：根据睡眠、心率和你说的话，定今天怎么练
 - 🧳 **临时调整**：出差、生病、减量周写好起止日期，到期自动恢复
 - ⏱️ **训练记录器**：一组一组记，点数字直接填，组间休息倒计时，练完出分享卡
-- 📈 **下次目标**：每个动作下次练多重，按这次的记录定
+- 📈 **重量和下次目标**：计划里记过的动作直接写出该用多重，没记过的标"试重量"、告诉你第一次怎么试；练完按这次的记录定下次
 - 🏃 **有氧按热量排**：想每周多消耗多少千卡，按你的体重算出快走、慢跑、骑车各要练多久，写进计划
 - 📖 **动作图鉴**：220 个动作，一半左右带配图和动图，都有替代动作；34 种器械，拍一张就能认
 
@@ -97,14 +107,17 @@ IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训�
 - 🧮 **按你的情况自动组合**：说一句"我平时吃外卖、不吃猪肉"，IronM 从食谱里挑四顿，系统定份数，一天热量在目标上下 8% 以内、蛋白质够、没有你不吃的，确认才换
 - 🎯 **目标变了跟着换**：减脂改增肌，IronM 会看饮食计划还合不合新目标，不合就出一张换方案的卡片
 - 🥚 **食物库和食谱**：159 种食物、81 个食谱（家常、带饭、外卖食堂、素食、增重）、12 份外卖食堂常见餐
-- ✏️ **自己加**：我的食物（照包装填）、我的动作、我的方案，记餐、训练、排计划都能用
-- 🔥 **热量目标**：按基础代谢算；要调由 IronM 看你的记录决定，代码兜住下限：不低于基础代谢，单次不超过 300 千卡，累计不超过 500 千卡
+- 🍔 **连锁店菜单**：麦当劳官网公布的全部常规餐品和营养数据，记一餐直接搜，不让模型估
+- ✏️ **自己加**：我的食物（照包装填）、我的动作、我的方案，都能配一张图；记餐、训练、排计划都能用
+- 🔥 **热量目标**：按基础代谢算；要调由 IronM 看你的记录提建议，你确认了才生效；代码兜住下限：不低于基础代谢，单次不超过 300 千卡，累计不超过 500 千卡
 
 ### ❤️ 身体数据
 - 🧪 **化验单识别**：化验单、体检报告拍照识别（基于 [mirobody](https://github.com/thetahealth/mirobody)）
 - ⌚ **手表和苹果健康**：导入数据，每项指标都跟你自己的平时比
+- 😴 **今天的睡眠和心率**：首页直接看今天的，点开看近一周、近一个月；没记录的能自己记
 
 ### 🧩 还有
+- 🔔 **消息**：顶栏的铃铛里是 IronM 的调整和系统消息，每条直接写改了什么、为什么；等你确认的点一下确认或拒绝，生效了的还能撤销；能按关键字和日期找
 - 🎙️ **说话问**：输入框旁边的话筒，说完转成文字，改好再发；语音在服务器上用自己装的模型转，不花钱，录音转完就删
 - 🏅 **勋章**：最轻一周、深蹲到体重 1.5 倍、连续 8 周都练……只奖励做到的，不催
 - 🧠 **长期记忆**：记得你的伤病、器械、作息和喜好，记错了在「我」里删掉
@@ -121,13 +134,14 @@ IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训�
 
 | 页面 | 内容 |
 |---|---|
-| 🏠 首页 | 今天练什么（带天气）、调整过没有、开始训练、直接打卡；今天还能吃多少、拍照记、写一句；这周计划；排行榜热搜 |
-| 🐧 IronM | 对话，能打字也能说话；改计划、记一餐、改目标出预览卡片；它主动发的消息；每周周报；能发照片 |
+| 🏠 首页 | 今天练什么（带天气）、调整过没有、开始训练、直接打卡；今天吃什么，照计划吃的打个勾，吃了别的拍照或说一句；今天的睡眠和静息心率；这周计划；排行榜热搜 |
+| 🐧 IronM | 对话，能打字也能说话；改计划、记一餐、改目标出预览卡片；每周周报；能发照片和训练视频 |
+| 🔔 消息 | IronM 的调整和系统消息；等你确认的在最上面；改了什么、为什么；按关键字和日期找 |
 | 📖 图鉴 | 动作、器械、食物和食谱、训练方案库（最上面是跟着博主练）、饮食方案库；每页最下面是自己加的 |
 | 📊 记录 | 本周练了几次、累计时长、PR、和上周比；身体数据趋势；训练时间线和打卡照片；勋章墙 |
 | 👤 我 | 资料和目标、器材和场所、城市和天气、身体数据、记得的事、导入数据、模型设置、账号与隐私 |
-| 📋 训练计划 | 一周的安排，换动作、改组次、排顺序；每个动作的下次目标 |
-| ⏱️ 训练中 | 逐组记录、休息倒计时、加一组、计时 |
+| 📋 训练计划 | 一周的安排，换动作、改组次、排顺序；每个动作该用多重或"试重量"、下次目标 |
+| ⏱️ 训练中 | 逐组记录、休息倒计时、加一组、计时；摄像头看动作 |
 | 🍱 饮食账单 | 今天的热量余额、目标怎么算的；每顿照计划记或记实际吃的；饮食计划 |
 
 </details>
@@ -136,10 +150,10 @@ IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训�
 
 <table>
 <tr>
-<td align="center"><img src="docs/readme/live.png" width="200" /><br/><sub><b>训练记录器</b><br/>点数字直接填，组间休息倒计时</sub></td>
-<td align="center"><img src="docs/readme/diet-library.png" width="200" /><br/><sub><b>饮食方案库</b><br/>16 份整天的吃法，一键套用</sub></td>
-<td align="center"><img src="docs/readme/diet-plan.png" width="200" /><br/><sub><b>方案详情</b><br/>适合谁、热量和营养素怎么定</sub></td>
-<td align="center"><img src="docs/readme/atlas-moves.png" width="200" /><br/><sub><b>动作图鉴</b><br/>220 个动作，一半左右有配图和动图</sub></td>
+<td align="center"><img src="docs/readme/home.png" width="200" alt="首页：今天练什么、每个动作该用多重" /><br/><sub><b>首页</b><br/>今天练什么，每个动作该用多重</sub></td>
+<td align="center"><img src="docs/readme/plan.png" width="200" alt="训练计划：记过的写重量，没记过的试重量" /><br/><sub><b>训练计划</b><br/>记过的写重量，没记过的标试重量</sub></td>
+<td align="center"><img src="docs/readme/live.png" width="200" alt="训练记录器：摄像头看动作" /><br/><sub><b>训练记录器</b><br/>摄像头看动作，点数字直接填</sub></td>
+<td align="center"><img src="docs/readme/messages.png" width="200" alt="消息：IronM 的建议，确认才生效" /><br/><sub><b>消息</b><br/>IronM 的建议，你确认才生效</sub></td>
 </tr>
 </table>
 
@@ -161,7 +175,7 @@ IronM 把它们放到一起，交给同一个 AI 管家。它看得到你的训�
 🐳 **用 Docker**（Windows、Mac、Linux）
 
 ```bash
-git clone https://github.com/thetahealth/mirobody-ironm.git iron-m && cd iron-m
+git clone https://github.com/thetahealth/ironm.git iron-m && cd iron-m
 docker compose up -d
 ```
 
@@ -170,7 +184,7 @@ docker compose up -d
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # 已有 uv 可跳过，装完重开终端
 git lfs install
-git clone https://github.com/thetahealth/mirobody-ironm.git iron-m && cd iron-m
+git clone https://github.com/thetahealth/ironm.git iron-m && cd iron-m
 scripts/start.sh
 ```
 
@@ -192,7 +206,7 @@ IronM 是单 Agent：所有问题都由同一个 AI 回答。问到哪一类，�
 
 ## ❓ 常见问题
 
-**💰 要花钱吗？** IronM 免费。模型费用走你自己的账户，用 DeepSeek 的话问一次大约一分钱，跟着博主练生成一次几分钱。说话转文字、视频转文字用的是服务器上自己装的模型，不花钱。
+**💰 要花钱吗？** IronM 免费。模型费用走你自己的账户，用 DeepSeek 的话问一次大约一分钱，跟着博主练生成一次几分钱。说话转文字、视频转文字用的是服务器上自己装的模型，摄像头看动作、训练视频分析在你自己的手机上算，都不花钱。
 
 **📱 手机上能用吗？** 能，手机浏览器打开 <https://test-ironm.mirobody.ai> 就行，页面按手机屏幕设计。手机 App 还在做（代码在 `app/`，还没上架）。
 
@@ -216,11 +230,11 @@ make run                               # http://127.0.0.1:18090
 
 ## 🤝 参与贡献
 
-欢迎提 [Issue](https://github.com/thetahealth/mirobody-ironm/issues) 说说你用起来哪里顺手、哪里别扭，或者想要什么功能；也欢迎直接提 PR。改动大的话，先开个 Issue 聊一下方向。
+欢迎提 [Issue](https://github.com/thetahealth/ironm/issues) 说说你用起来哪里顺手、哪里别扭，或者想要什么功能；也欢迎直接提 PR。改动大的话，先开个 Issue 聊一下方向。
 
 ## ⭐ Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=thetahealth/mirobody-ironm&type=Date)](https://star-history.com/#thetahealth/mirobody-ironm&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=thetahealth/ironm&type=Date)](https://star-history.com/#thetahealth/ironm&Date)
 
 ## 📄 许可
 

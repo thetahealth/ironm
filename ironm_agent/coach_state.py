@@ -39,7 +39,16 @@ type ChangeKind = Literal[
 HISTORY_DAYS = 63  # 读多久的训练记录（平台期要看 9 周）
 SUGGEST_DAYS = 7  # 管家的建议没处理时挂几天（§182）；带预览的跟着预览的有效期
 REFUSE_DAYS = 14  # 他说"不用这样调"、撤销、取消预览后，同一件事几天内不再提（§182）
-SUGGEST_TYPES = ("propose", "note", "ask")  # 挂着等他处理的建议；今天怎么练、热量是当场生效的，不挂
+SUGGEST_TYPES = ("propose", "note", "ask")  # 挂着等他处理的建议；今天怎么练是当场生效的，不挂；热量建议没确认时也挂（§238）
+
+
+def kcal_applied(done: Any) -> bool:
+    """这条热量调整生效了没有（§238）：新的先是建议（pending），他确认后才生效（applied）；旧数据没有这两个标记，是当场生效的。"""
+    return not done.value.get("pending") or bool(done.value.get("applied"))
+
+
+def waiting_kcal(done: Any) -> bool:
+    return done.type == "kcal" and not kcal_applied(done)
 NOT_REFUSED = ("review:today",)  # 今天怎么练只管今天：撤销了不影响以后几天
 
 
@@ -346,7 +355,7 @@ def _review_items(inp: Inputs) -> list[Item]:
     mine = {d.key for d in inp.review.done} if inp.review is not None else set()
     out = [Item(key=d.key, kind="proposal" if d.type == "propose" else "review", title=d.title, why=d.why,
                 basis=d.basis,
-                action="confirm" if d.type == "propose" else "info" if d.type in ("note", "ask") else "auto",
+                action="confirm" if d.type == "propose" or waiting_kcal(d) else "info" if d.type in ("note", "ask") else "auto",
                 value={"type": d.type, "expect": d.expect, **d.value,
                        **({"appeared": d.appeared.isoformat()} if d.appeared else {}),
                        **({"expires": d.expires.isoformat()} if d.expires else {})})
@@ -780,7 +789,7 @@ def carry(state: State | None, today: date) -> list[Done]:
     old = state.review
     if old is not None and old.day < today:
         for d in old.done:
-            if d.type in SUGGEST_TYPES:
+            if d.type in SUGGEST_TYPES or waiting_kcal(d):
                 out[d.key] = d.model_copy(update={"appeared": d.appeared or old.day})
     keep = []
     for d in out.values():

@@ -731,10 +731,11 @@ class PgTraining:
             " WHERE user_id = :uid ORDER BY created_at",
             {"uid": user_id},
         )
-        return [
-            StoredPlan(str(r["id"]), _plan_of(json.loads(r["content"])), r["created_at"])
-            for r in rows
-        ]
+        out = []
+        for r in rows:  # 和取当前计划时一样带上"是在上一版上改的"：计划的改动历史靠它分清换了还是改了（§230）
+            content = json.loads(r["content"])
+            out.append(StoredPlan(str(r["id"]), _plan_of(content), r["created_at"], edit=_is_edit(content)))
+        return out
 
     async def workouts(self, user_id: str, since: date) -> list[StoredLog]:
         rows = await self._q(
