@@ -2,7 +2,7 @@
 
 ## Lucide 图标（app.js 里的 ICONS）
 
-图标的造型（SVG 路径）来自 Lucide（https://lucide.dev），按原样内联在页面里。
+图标的造型（SVG 路径）来自 Lucide（https://lucide.dev），按原样内联在页面里。建档卡片里的性别、壶铃、弹力带、单杠、健身器械、健身房、强度格子和关节小人是照同样线条自己画的，不是 Lucide 的。
 
 ISC License
 

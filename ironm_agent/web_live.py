@@ -25,7 +25,14 @@ from ironm_agent.live import (
 )
 from ironm_agent.memory_store import MemoryStore
 from ironm_agent.training import SORE_PARTS, Feeling, Plan, TrainingStore, WorkoutLog
-from ironm_agent.web import _verify, after_workout, memory_store, record_sore, training_store
+from ironm_agent.web import (
+    _verify,
+    after_workout,
+    memory_store,
+    record_sore,
+    start_basis,
+    training_store,
+)
 from ironm_agent.web_more import (
     DAY,
     FEEL,
@@ -243,7 +250,8 @@ async def start_live(
             return _out(live, now)
         rests = await lives.rests(user_id)
         decided = await _decided(user_id)
-        more = [new_item(n, plan, logs, rests, decided, modes.get(n)) for n in names]
+        basis = await start_basis(user_id, memory)  # 没记过重量的动作先填好建议重量（§249）
+        more = [new_item(n, plan, logs, rests, decided, modes.get(n), basis) for n in names]
         update: dict[str, Any] = {"items": [*live.items, *more][:15], "updated": now}
         if joins and today is not None:
             update["session"] = today.name
@@ -258,7 +266,8 @@ async def start_live(
         session = today.name
         names = [*picked, *(x.exercise for x in today.items)]  # 库里没有的也照加（§123）
     decided = await _decided(user_id)
-    items = [new_item(n, plan, logs, rests, decided, modes.get(n)) for n in dict.fromkeys(names)][:15]
+    basis = await start_basis(user_id, memory)
+    items = [new_item(n, plan, logs, rests, decided, modes.get(n), basis) for n in dict.fromkeys(names)][:15]
     live = fresh(session, items, now).model_copy(
         update={"no_heavier": no_heavier(await _special(user_id, memory))}
     )
@@ -330,6 +339,7 @@ async def add_live_item(
     lives: LiveStore = LIVE,
     store: TrainingStore = TRAINING,
     kitchen: Any = KITCHEN,
+    memory: MemoryStore = STORE,
 ) -> dict[str, Any]:
     """加一个动作：和开始时一样预先填好重量、次数和休息秒数；我的动作也能加（§198）。"""
     now = datetime.now()
@@ -344,7 +354,8 @@ async def add_live_item(
     if len(live.items) >= 15:
         raise HTTPException(422, "一次最多 15 个动作")
     plan, logs = await _context(user_id, store)
-    item = new_item(name, plan, logs, await lives.rests(user_id), await _decided(user_id), modes.get(name))
+    item = new_item(name, plan, logs, await lives.rests(user_id), await _decided(user_id), modes.get(name),
+                    await start_basis(user_id, memory))
     live = live.model_copy(update={"items": [*live.items, item], "updated": now})
     await lives.save(user_id, live)
     return _out(live, now)

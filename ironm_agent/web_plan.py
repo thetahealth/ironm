@@ -207,3 +207,74 @@ async def put_gear(
     lacking = missing(stored.plan if stored else None, equipment([item]))
     _log.info("gear saved: place=%s gear=%d lacking=%d", body.place, len(body.gear), len(lacking))
     return {**read(await memory.items(user_id)), "lacking": lacking}
+
+
+# ---- 建档里问的训练条件（spec [2026-10-23] §244 需求 5）---------------------------------------------
+# 训练水平、每周几天和每次多久、伤病写进记忆，和对话里记的是同一份；器材走上面的 /iron/api/gear
+
+INTAKE_PARTS: dict[str, str] = {  # 建档的七个部位 → 关节编码；名字照 facts.PARTS 认得出的说法写
+    "joint.shoulder": "肩", "joint.elbow": "手肘", "joint.wrist": "手腕", "joint.lumbar": "腰背",
+    "joint.hip": "髋", "joint.knee": "膝盖", "joint.ankle": "脚踝",
+}  # fmt: skip
+
+
+class IntakeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["none", "lt6m", "6m-2y", "2y+"] | None = None
+    per_week: int | None = Field(default=None, ge=2, le=6)
+    minutes: Literal[30, 45, 60, 90] | None = None
+    injuries: list[str] = Field(default_factory=list, max_length=7)
+    note: str = Field(default="", max_length=30)
+
+
+@router.put("/iron/api/intake")
+async def put_intake(
+    body: IntakeIn, user_id: str = Depends(_verify()), memory: MemoryStore = STORE
+) -> dict[str, Any]:
+    """没答的不写；答了的各写一条（来源"你改过的"、原话标"档案里填的"），同一件事之前的标成被取代。"""
+    from ironm_agent.facts import INJURY, derive, derive_schedule, key_of, side_in
+    from ironm_agent.gear import FORM
+    from ironm_agent.memory_store import Change, Item, new_id, now
+    from ironm_agent.protools.builder import LEVEL_NAMES
+
+    if bad := [p for p in body.injuries if p not in INTAKE_PARTS]:
+        raise HTTPException(422, f"部位不对：{'、'.join(bad)}")
+    note = " ".join(body.note.split())
+    if note and not body.injuries:
+        raise HTTPException(422, "先选哪里有伤病，再补一句")
+    items = [x for x in await memory.items(user_id) if x.status in ("active", "pending")]
+    t, changes, wrote = now(), [], []
+
+    def put(category: Any, content: str, data: dict[str, Any], key: str, old: list[Item]) -> None:
+        item = Item(id=new_id(), category=category, content=content, evidence=FORM, origin="edited",
+                    status="active", created=t, updated=t, supersedes=old[-1].id if old else None,
+                    data=data, key=key)  # fmt: skip
+        changes.extend(Change(kind="status", id=x.id, status="superseded") for x in old)
+        changes.append(Change(kind="insert", item=item))
+        wrote.append(category)
+
+    if body.level:
+        put("level", LEVEL_NAMES[body.level], {"level": body.level}, "",
+            [x for x in items if x.category == "level"])
+    if body.per_week or body.minutes:
+        text = "，".join(b for b in (f"每周练 {body.per_week} 天" if body.per_week else "",
+                                    f"每次 {body.minutes} 分钟" if body.minutes else "") if b)  # fmt: skip
+        data = derive_schedule(text)
+        put("schedule", text, data, key_of("schedule", data),
+            [x for x in items if x.category == "schedule" and x.key == "schedule"])
+    if body.injuries:
+        parts = list(dict.fromkeys(body.injuries))
+        text = "、".join(INTAKE_PARTS[p] for p in parts) + "有伤病" + (f"：{note}" if note else "")
+        _, data = derive(INJURY, text)
+        data = {**data, "parts": parts}
+        if side := side_in(note, len(parts)) if note else "":
+            data["side"] = side
+        else:
+            data.pop("side", None)
+        key = key_of(INJURY, data)
+        put(INJURY, text, data, key, [x for x in items if x.category == INJURY and x.key == key])
+    if changes:
+        await memory.apply(user_id, changes)
+    _log.info("intake saved: %s", ",".join(wrote) or "-")
+    return {"saved": wrote}

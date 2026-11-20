@@ -206,6 +206,7 @@ def new_item(
     rests: dict[str, int],
     decided: Mapping[str, Decided] | None = None,
     mode: str | None = None,
+    basis: Any = None,
 ) -> LiveItem:
     """一个动作：重量和次数按管家定的下次目标预先填好；管家没定（或已经不适用）的逐组照上次，
     没做过的按计划写组数；都没有时空着（§163 需求 6：不按规则算进阶）。
@@ -264,7 +265,10 @@ def new_item(
         sets = [(was[i] if i < len(was) else was[-1]).model_copy() for i in range(k)]
     tip = ""
     if not timed and sets[0].weight_kg is None and needs_weight(name, planned.reps if planned else None):
-        tip = start_of(name, logs, date.today()).hint  # 没记过重量：第一次试出来记下（§229）
+        start = start_of(name, logs, date.today(), basis=basis)  # 没记过重量：按基本信息的建议重量先填好（§249）
+        tip = start.hint
+        if start.kind == "suggest" and not last:
+            sets = [x.model_copy(update={"weight_kg": start.weight_kg}) for x in sets]
     return LiveItem(exercise=name, timed=timed, rest=rest_of(name, rests), target=target[:40],
                     best=best_e1rm(name, logs), plan_kg=sets[0].weight_kg, sets=sets, tip=tip)  # fmt: skip
 

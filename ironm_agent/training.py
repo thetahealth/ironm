@@ -243,6 +243,7 @@ class WorkoutLog(_Model):
     rpe: int | None = Field(default=None, ge=1, le=10)  # 感受（1 很轻松 … 10 到极限）
     minutes: int | None = Field(default=None, ge=1, le=300)
     note: str = Field(default="", max_length=80)
+    at: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")  # 几点打的卡（§247），以前的没有
     # 打卡多记的（§105，都可以不填）：精力、昨晚睡得、哪里酸；没练的那天记原因（不算练了，done 为 False）
     energy: Feeling | None = None
     slept: Feeling | None = None

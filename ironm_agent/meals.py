@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from functools import cache
 from pathlib import Path
@@ -136,6 +136,7 @@ class Meal(BaseModel):
     confidence: str = ""  # 低 / 中 / 高
     note: str = Field(default="", max_length=120)
     said: str = Field(default="", max_length=120)  # 用户的描述
+    at: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")  # 几点吃的（§247），以前的记录没有
 
 
 def meal_image(meal: Meal) -> dict[str, Any] | None:
@@ -437,6 +438,7 @@ class StoredMeal:
     meal: Meal
     created: datetime
     has_photo: bool = False
+    deleted: datetime | None = None  # 自己删掉的时间：不显示、不算热量，留底能查（§247）
 
     def json(self) -> dict[str, Any]:
         return {
@@ -444,6 +446,7 @@ class StoredMeal:
             "day": self.day.isoformat(),
             "created": self.created.isoformat(),
             "has_photo": self.has_photo,
+            "deleted": self.deleted.isoformat() if self.deleted else None,
             **self.meal.model_dump(mode="json"),
             "image": meal_image(self.meal),
         }
@@ -458,6 +461,7 @@ class MealStore(Protocol):
     async def replace(self, user_id: str, meal_id: str, meal: Meal) -> StoredMeal | None: ...
     async def photo(self, user_id: str, meal_id: str) -> tuple[bytes, str] | None: ...
     async def delete(self, user_id: str, meal_id: str) -> bool: ...
+    async def deleted(self, user_id: str, day: date) -> list[StoredMeal]: ...
 
 
 def totals(meals: Sequence[StoredMeal]) -> Macros:
@@ -506,19 +510,25 @@ class MealBook:
 
     async def day(self, user_id: str, day: date) -> list[StoredMeal]:
         return sorted(
-            (r for u, r, _, _ in self.rows.values() if u == user_id and r.day == day),
+            (r for u, r, _, _ in self.rows.values() if u == user_id and r.day == day and r.deleted is None),
             key=lambda r: r.created,
         )
 
     async def since(self, user_id: str, day: date) -> list[StoredMeal]:
         return sorted(
-            (r for u, r, _, _ in self.rows.values() if u == user_id and r.day >= day),
+            (r for u, r, _, _ in self.rows.values() if u == user_id and r.day >= day and r.deleted is None),
             key=lambda r: (r.day, r.created),
+        )
+
+    async def deleted(self, user_id: str, day: date) -> list[StoredMeal]:
+        return sorted(
+            (r for u, r, _, _ in self.rows.values() if u == user_id and r.day == day and r.deleted is not None),
+            key=lambda r: r.deleted or r.created,
         )
 
     async def replace(self, user_id: str, meal_id: str, meal: Meal) -> StoredMeal | None:
         found = self.rows.get(meal_id)
-        if found is None or found[0] != user_id:
+        if found is None or found[0] != user_id or found[1].deleted is not None:
             return None
         row = StoredMeal(found[1].id, found[1].day, meal, found[1].created, found[1].has_photo)
         self.rows[meal_id] = (user_id, row, found[2], found[3])
@@ -532,9 +542,9 @@ class MealBook:
 
     async def delete(self, user_id: str, meal_id: str) -> bool:
         found = self.rows.get(meal_id)
-        if found is None or found[0] != user_id:
+        if found is None or found[0] != user_id or found[1].deleted is not None:
             return False
-        del self.rows[meal_id]
+        self.rows[meal_id] = (user_id, replace(found[1], deleted=datetime.now().astimezone()), found[2], found[3])
         return True
 
 
@@ -550,6 +560,8 @@ CREATE TABLE IF NOT EXISTS ironm_meal (
 )
 """
 INDEX = "CREATE INDEX IF NOT EXISTS ironm_meal_user_day ON ironm_meal (user_id, day)"
+# 删掉的留底（§247）：删除只写删除时间，查今天吃的时不带
+SOFT_DELETE = "ALTER TABLE ironm_meal ADD COLUMN IF NOT EXISTS deleted_at timestamptz"
 
 
 class PgMeals:
@@ -562,7 +574,7 @@ class PgMeals:
         from mirobody.utils.db import execute_query
 
         if not self._ready:
-            await run_ddl(DDL, INDEX)
+            await run_ddl(DDL, INDEX, SOFT_DELETE)
             self._ready = True
         rows = await execute_query(sql, params or {}, log_sql=False)
         return rows if isinstance(rows, list) else []
@@ -592,7 +604,7 @@ class PgMeals:
     async def day(self, user_id: str, day: date) -> list[StoredMeal]:
         rows = await self._q(
             "SELECT id, day, decrypt_content(content) AS content, photo IS NOT NULL AS has_photo, created_at "
-            "FROM ironm_meal WHERE user_id = :uid AND day = :day ORDER BY created_at",
+            "FROM ironm_meal WHERE user_id = :uid AND day = :day AND deleted_at IS NULL ORDER BY created_at",
             {"uid": user_id, "day": day},
         )
         return self._rows(rows)
@@ -600,14 +612,14 @@ class PgMeals:
     async def since(self, user_id: str, day: date) -> list[StoredMeal]:
         rows = await self._q(
             "SELECT id, day, decrypt_content(content) AS content, photo IS NOT NULL AS has_photo, created_at "
-            "FROM ironm_meal WHERE user_id = :uid AND day >= :day ORDER BY day, created_at",
+            "FROM ironm_meal WHERE user_id = :uid AND day >= :day AND deleted_at IS NULL ORDER BY day, created_at",
             {"uid": user_id, "day": day},
         )
         return self._rows(rows)
 
     async def replace(self, user_id: str, meal_id: str, meal: Meal) -> StoredMeal | None:
         rows = await self._q(
-            "UPDATE ironm_meal SET content = encrypt_content(:content) WHERE user_id = :uid AND id = :id "
+            "UPDATE ironm_meal SET content = encrypt_content(:content) WHERE user_id = :uid AND id = :id AND deleted_at IS NULL "
             "RETURNING id, day, photo IS NOT NULL AS has_photo, created_at",
             {"uid": user_id, "id": meal_id,
              "content": json.dumps(meal.model_dump(mode="json"), ensure_ascii=False)},
@@ -641,11 +653,21 @@ class PgMeals:
         return base64.b64decode(rows[0]["photo"]), str(rows[0].get("photo_mime") or "image/jpeg")
 
     async def delete(self, user_id: str, meal_id: str) -> bool:
-        rows = await self._q(
-            "DELETE FROM ironm_meal WHERE user_id = :uid AND id = :id RETURNING id",
+        rows = await self._q(  # 不真删（§247）：写上删除时间，留底能查
+            "UPDATE ironm_meal SET deleted_at = now() WHERE user_id = :uid AND id = :id AND deleted_at IS NULL "
+            "RETURNING id",
             {"uid": user_id, "id": meal_id},
         )
         return bool(rows)
+
+    async def deleted(self, user_id: str, day: date) -> list[StoredMeal]:
+        rows = await self._q(
+            "SELECT id, day, decrypt_content(content) AS content, photo IS NOT NULL AS has_photo, created_at, "
+            "deleted_at FROM ironm_meal WHERE user_id = :uid AND day = :day AND deleted_at IS NOT NULL "
+            "ORDER BY deleted_at",
+            {"uid": user_id, "day": day},
+        )
+        return [replace(m, deleted=r["deleted_at"]) for r in rows for m in self._rows([r])]
 
 
 _default: MealStore | None = None

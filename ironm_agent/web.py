@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -512,6 +512,7 @@ class WorkoutIn(BaseModel):
     slept: Feeling | None = None
     sore: list[str] = Field(default_factory=list, max_length=len(SORE_PARTS))
     rest: RestWhy | None = None  # 今天没练：休息、生病、出差、太忙（不算练了）
+    at: str = ""  # 几点练的（§247），默认现在
 
 
 @router.post("/iron/api/workouts")
@@ -524,7 +525,10 @@ async def add_workout(
     illness: Any = ILLNESS,
     feel: Any = FEEL,
 ) -> dict[str, Any]:
+    from ironm_agent.web_more import meal_at
+
     data = body.model_dump()
+    data["at"] = meal_at(body.at) or datetime.now().strftime("%H:%M")  # 没选按现在（§247）
     if body.rest is not None:  # 没练的那条：不算练了（§105）
         data.update(done=False, items=[])
     try:
@@ -589,9 +593,23 @@ async def _decided(user_id: str) -> dict[str, Any]:
     return await web_more.decided_targets(user_id)
 
 
+async def start_basis(user_id: str, memory: MemoryStore | None = None) -> Any:
+    """算建议起步重量用的基本信息（§249）；档案、健康数据或记忆读不到时返回 None（照旧"试重量"）。"""
+    from ironm_agent.start_weight import basis_from
+
+    try:
+        snap = await snapshot_for(user_id)
+        items = await (memory or memory_store()).items(user_id)
+        return basis_from(snap, items)
+    except Exception as e:
+        _log.warning("start basis unavailable: error_type=%s", type(e).__name__)
+        return None
+
+
 @router.get("/iron/api/training")
 async def get_training(
-    user_id: str = Depends(_verify()), store: TrainingStore = TRAINING, photos: Any = PHOTOS
+    user_id: str = Depends(_verify()), store: TrainingStore = TRAINING, photos: Any = PHOTOS,
+    memory: MemoryStore = STORE,
 ) -> dict[str, Any]:
     today = date.today()
     plan = await store.plan(user_id)
@@ -600,7 +618,8 @@ async def get_training(
     older = await store.workouts(user_id, today - timedelta(days=LOOKBACK_DAYS))  # 重量往回多看一些（§229）
     logs = [x for x in older if (today - x.log.day).days <= 42]  # 下次目标照旧只看最近 6 周
     found = targets(plan.plan if plan else None, [x.log for x in logs], await _decided(user_id))
-    weights = starts(plan.plan if plan else None, [x.log for x in older], found, today)
+    basis = await start_basis(user_id, memory) if plan else None
+    weights = starts(plan.plan if plan else None, [x.log for x in older], found, today, basis)
     shown = [x for x in reversed(logs) if (today - x.log.day).days <= 30]
     try:  # 哪些打卡带了照片（§117）；读不到当作都没有
         with_photo = await photos.having(user_id, [x.id for x in shown])
@@ -622,7 +641,7 @@ async def get_training(
             }
             for k, t in found.items()
         },
-        # 每个要用重量的动作：有记录的是多重，没记录的标"试重量"（§229）
+        # 每个要用重量的动作：有记录的是多重，没记录的按基本信息写建议重量（§229、§249）
         "weights": {k: v.json() for k, v in weights.items()},
         "workouts": [
             {

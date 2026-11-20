@@ -66,6 +66,7 @@ from ironm_agent.constraints import check as check_constraints
 from ironm_agent.day_state import DayState, DayStore, default_day
 from ironm_agent.day_state import lines as day_lines
 from ironm_agent.exercises import named_in
+from ironm_agent.gear import FORM
 from ironm_agent.goal import GoalStore, default_goal
 from ironm_agent.goal import line as target_line
 from ironm_agent.harness import TraceStore, missing_readings, new_turn, react
@@ -701,10 +702,13 @@ class IronMAgent:
         return [line] if line else []
 
     async def _trial_lines(
-        self, user_id: str, plan: Plan | None, recent: list[WorkoutLog], today: date
+        self, user_id: str, plan: Plan | None, recent: list[WorkoutLog], snapshot: Snapshot, items: list[Item]
     ) -> list[str]:
-        """计划里还没有重量记录的动作（§229）。最近两周的记录里都有重量就不多读；有缺的再往回读 180 天核对。"""
-        from ironm_agent.start_weight import LOOKBACK_DAYS, trial_lines
+        """计划里还没有重量记录的动作（§229），带上按基本信息算的建议重量（§249）。
+        最近两周的记录里都有重量就不多读；有缺的再往回读 180 天核对。"""
+        from ironm_agent.start_weight import LOOKBACK_DAYS, basis_from, trial_lines
+
+        today = snapshot.today
 
         if not trial_lines(plan, recent, today):
             return []
@@ -713,7 +717,12 @@ class IronMAgent:
         except Exception as e:  # 读不到更早的：不说，免得把练过的动作说成没记录
             _log.warning("older workouts unavailable: error_type=%s", type(e).__name__)
             return []
-        return trial_lines(plan, [x.log for x in older], today)
+        try:
+            basis = basis_from(snapshot, items)
+        except Exception as e:  # 算不出建议重量：照旧只列名字
+            _log.warning("start basis unavailable: error_type=%s", type(e).__name__)
+            basis = None
+        return trial_lines(plan, [x.log for x in older], today, basis)
 
     async def _read_training(
         self, user_id: str, today: date
@@ -1777,7 +1786,7 @@ class IronMAgent:
         triggers = {name for name, on in (
             ("plan", job_hint == "plan"), ("log", job_hint == "log"),
             ("image", bool(files.images)), ("move", bool(named_in(text))),
-            ("new", plan is None and not logs and not recall.items),  # 新用户：一定装初次评估（§76）
+            ("new", plan is None and not logs and all(x.evidence == FORM for x in recall.items)),  # 新用户：一定装初次评估（§76）；建档、档案表单写的不算（§244 需求 6）
             *((k, True) for k in records),
         ) if on}  # fmt: skip
         drop = {"injury"} if asks_data else set()
@@ -2823,7 +2832,7 @@ class IronMAgent:
         case = build_case(
             snapshot, recall, text,
             plan=lines + target_lines(plan, steady, snapshot.today, decided)
-            + await self._trial_lines(user_id, plan, logs, snapshot.today),
+            + await self._trial_lines(user_id, plan, logs, snapshot, body),
             illness=state, day=today_lines,
             insights=insight_lines, target=target, sore=sore_parts,
             meals=await self._meals_line(user_id, snapshot), diet_plan=await self._diet_plan_line(user_id),

@@ -503,23 +503,35 @@ def _kind(kind: str) -> MealKind:
 async def _save_meal(
     store: MealStore, user_id: str, meal: Meal, photo: bytes | None = None, mime: str = ""
 ) -> dict[str, Any]:
-    """存下这一餐，再删掉今天同一种餐原来的记录：每种餐每天只留一份（spec [2026-10-23] §43）。
-    先存后删，存不上时原来那条还在。"""
+    """存下这一餐。同一种餐可以记多条，不再替换原来的（§247，取代 §43 需求 4）；没说几点的按现在。"""
+    if not meal.at:
+        meal = meal.model_copy(update={"at": datetime.now().strftime("%H:%M")})
     row = await store.add(user_id, date.today(), meal, photo, mime)
-    replaced = []
-    for old in await store.day(user_id, row.day):
-        if old.id != row.id and old.meal.kind == meal.kind and await store.delete(user_id, old.id):
-            replaced.append(old.meal.name)
     coach_later(user_id, "记饮食")
-    return {"meal": row.json(), "replaced": replaced, **(await _day_json(user_id, row.day, store))}
+    return {"meal": row.json(), **(await _day_json(user_id, row.day, store))}
+
+
+def meal_at(raw: str) -> str:
+    """记一餐、打卡选的几点（§247）：今天的 时:分，不晚于现在（差几分钟算钟不准）；没选的空着按现在算。"""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", raw):
+        raise HTTPException(422, "几点要写成 时:分，比如 12:30")
+    now = datetime.now()
+    if int(raw[:2]) * 60 + int(raw[3:]) > now.hour * 60 + now.minute + 5:
+        raise HTTPException(422, "只能选今天、不晚于现在的时间")
+    return raw
 
 
 async def _day_json(user_id: str, day: date, store: MealStore) -> dict[str, Any]:
     meals = await store.day(user_id, day)
+    gone = getattr(store, "deleted", None)  # 删掉的留底（§247）；测试用的简化存储可能没有
     out: dict[str, Any] = {
         "day": day.isoformat(),
         "meals": [m.json() for m in meals],
         "totals": totals(meals).model_dump(),
+        "deleted": [m.json() for m in await gone(user_id, day)] if gone else [],
     }
     try:
         target, goal, _ = await _targets(user_id)
@@ -542,12 +554,15 @@ async def get_meals(
 async def add_meal(
     said: str = Form(""),
     kind: str = Form("午餐"),
+    at: str = Form(""),
     photo: UploadFile | None = PHOTO,
     user_id: str = Depends(_verify()),
     store: MealStore = MEALS,
 ) -> dict[str, Any]:
     """拍照加描述记一餐：营养估算热量和三大营养素（写明是估算）。"""
+    when = meal_at(at)
     meal, data, mime = await _estimate_meal(user_id, said, kind, photo)
+    meal = meal.model_copy(update={"at": when})
     _log.info("meal added: photo=%s", data is not None)
     return await _save_meal(store, user_id, meal, data, mime)
 
@@ -626,12 +641,15 @@ async def confirm_meal(
     meal: str = Form(...),
     kind: str = Form("午餐"),
     said: str = Form(""),
+    at: str = Form(""),
+    replaces: str = Form(""),
     photo: UploadFile | None = PHOTO,
     user_id: str = Depends(_verify()),
     store: MealStore = MEALS,
     kitchen: Any = KITCHEN,
 ) -> dict[str, Any]:
-    """记下调好克数的这一餐（§202）：营养按克数由这里重算——食物库的按库，我的食物按自己填的，库里没有的按估值。"""
+    """记下调好克数的这一餐（§202）：营养按克数由这里重算——食物库的按库，我的食物按自己填的，库里没有的按估值。
+    replaces：替换今天记过的那一条（§248）——新的存好后原来那条留底（算删掉的），没传新照片时沿用原来的照片。"""
     from ironm_agent.web_diet import own_line
 
     try:
@@ -640,6 +658,10 @@ async def confirm_meal(
         raise HTTPException(422, "这一餐的内容不对，重新估一次") from None
     meal_kind = _kind(kind)
     data, mime = await _read_photo(photo)
+    if replaces and not any(m.id == replaces for m in await store.day(user_id, date.today())):
+        raise HTTPException(404, "要替换的那条不在今天的记录里，刷新一下")
+    if replaces and data is None and (old := await store.photo(user_id, replaces)):
+        data, mime = old
     mine: dict[str, Any] = {}
     if any((x.food_id or "").startswith("my-") for x in body.foods):
         from ironm_agent.mine import FOOD, load
@@ -656,7 +678,7 @@ async def confirm_meal(
             lines.append(own_line(x.name, x.grams, x.est100))
         else:
             raise HTTPException(422, f"「{x.name}」算不出营养，删掉或从库里加")
-    extra = {"confidence": body.confidence, "said": said.strip()[:120]}
+    extra = {"confidence": body.confidence, "said": said.strip()[:120], "at": meal_at(at)}
     if lines:
         built = meal_from(meal_kind, body.name or "、".join(x.name for x in lines), lines, note=body.note, **extra)
     elif body.macros is not None:
@@ -664,8 +686,11 @@ async def confirm_meal(
         built = Meal(kind=meal_kind, name=body.name or "这一餐", macros=m.rounded(), note=body.note, **extra)
     else:
         raise HTTPException(422, "至少留一样")
-    _log.info("meal confirmed: photo=%s lines=%d", data is not None, len(lines))
-    return await _save_meal(store, user_id, built, data, mime)
+    _log.info("meal confirmed: photo=%s lines=%d replaces=%s", data is not None, len(lines), bool(replaces))
+    out = await _save_meal(store, user_id, built, data, mime)
+    if replaces and await store.delete(user_id, replaces):  # 先存后删：存不上时原来那条还在
+        out = {**out, **(await _day_json(user_id, date.today(), store))}
+    return out
 
 
 class PresetIn(BaseModel):

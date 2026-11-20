@@ -2572,3 +2572,26 @@ entries:
     keywords: ["减脂", "增肌", "能量缺口", "热量盈余", "减重速度", "高蛋白", "去脂体重", "身体成分"]
     url: https://doi.org/10.1186/s12970-017-0174-y
     review: claude_draft
+
+  - id: K126
+    domains: [training, data]
+    title: "力量标准表：按性别、体重、训练水平和年龄，一次最多能举多重"
+    source: "Weightlifting Performance Standards（Squat、Bench Press、Deadlift、Press 各表，kg 版，18–39 岁及 40–49、50–59、60–69 岁）"
+    publisher: "Lon Kilgore 提供，ExRx.net"
+    year: 2024
+    level: textbook
+    population: "18 岁以上成年人，男女分表"
+    summary: "四个杠铃主项按体重分行、按训练水平分列给出一次最大重量（1RM）；数据来自几十年比赛分级的积累，不是回归推算，不能当作常模。"
+    points:
+      - text: "没练过：以前没练过这个动作、但能做对；练了几个月：规律练了最多几个月；练了一两年：规律练了最多两年左右"
+        where: "Explanation of Strength Standards — Training levels"
+      - text: "男 75 公斤、18–39 岁一次最大重量（没练过 / 练了几个月 / 练了一两年）：深蹲 50 / 92.5 / 112.5，卧推 55 / 70 / 85，硬拉 62.5 / 115 / 135，站姿推举 32.5 / 45 / 57.5"
+        where: "各项 Adult Men 表，Body Weight 75 行"
+      - text: "女 60 公斤、18–39 岁（同上三栏）：深蹲 27.5 / 50 / 60，卧推 32.5 / 40 / 42.5，硬拉 35 / 62.5 / 72.5，站姿推举 17.5 / 25 / 30"
+        where: "各项 Adult Women 表，Body Weight 60 行"
+      - text: "同体重同水平，年龄越大越轻：男 75 公斤没练过的深蹲，18–39 岁 50、40–49 岁 42.5、50–59 岁 37.5、60–69 岁 27.5"
+        where: "Squat 各年龄段表，Body Weight 75 行"
+    keywords: ["起步重量", "建议重量", "力量标准", "能举多重", "1RM", "第一次练多重"]
+    url: https://exrx.net/Testing/WeightLifting/StrengthStandards
+    review: approved
+

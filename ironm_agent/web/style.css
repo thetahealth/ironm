@@ -1470,6 +1470,8 @@ body:has(#fab:not([hidden])) .app { padding-bottom: calc(var(--tabs-h) + 96px + 
 .pd-tools { display: flex; gap: 6px; flex: none; }
 .pd-item[role="button"] { cursor: pointer; }
 .pd-edit { color: var(--muted); flex: none; display: grid; place-items: center; width: 28px; }
+.pd-swap { flex: none; color: var(--accent); }
+.pd-list > .swipe + .swipe .pd-item, .pd-list > .swipe + .pd-item, .pd-list > .pd-item + .swipe .pd-item { border-top: 1px solid rgb(15 42 29 / 5%); }
 .pd-edited { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--ink-2); font-size: 13px; }
 .pd-edited .link { flex: none; }
 .pd-burn { font: inherit; font-size: 13px; color: var(--muted); padding: 0; text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -2864,7 +2866,7 @@ body.fc-on { overflow: hidden; }
 
 /* 计划里的重量（§229）：动作旁写多重，没记过的标"试重量" */
 .kg-tag { margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
-.kg-tag.trial, .kg-tag.again { color: var(--accent); }
+.kg-tag.trial, .kg-tag.again, .kg-tag.suggest, .kg-tag.light { color: var(--accent); }
 .lf-tip { margin: 0; font-size: 13px; color: var(--ink-2); }
 
 /* ---- 填写表单重做（§232）：预览、大数字格、带单位的小格。颜色圆角都用上面已有的变量 ---- */
@@ -2939,6 +2941,158 @@ body.fc-on { overflow: hidden; }
 .pd-burn { display: block; margin-top: 2px; text-align: left; white-space: nowrap; }
 /* 重量标记单独占一行时和上面的字左边对齐（§229 加的标记原来一律左边留 6 像素） */
 .row-main > .kg-tag, .q-name > .kg-tag { margin-left: 0; }
+
+/* 建档一屏一问（§244）：进度条、问题、图标大卡片（按下缩一下，选中描边、底色、右上角一个勾）、刻度尺 */
+.ob-wrap { width: 100%; margin-top: 5dvh; gap: 16px; align-items: stretch; text-align: left; }
+.ob-wrap .wordmark { align-self: center; }
+.ob { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+.ob-top { display: flex; align-items: center; gap: 10px; }
+.ob-gap { width: 36px; flex: none; }
+.ob-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ob-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease; }
+.ob-step { flex: none; min-width: 36px; text-align: right; font-size: 13px; color: var(--muted); }
+.ob-q { margin: 14px 0 0; font-size: 24px; line-height: 1.3; font-weight: 800; color: var(--ink); }
+.ob-q .req { color: var(--accent-text); }
+.ob-why { margin: -6px 0 2px; }
+.ob-stack { display: flex; flex-direction: column; gap: 10px; }
+.ob-stack > .label { margin-top: 4px; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.ob-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ob-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ob-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ob-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.ob-grid.one { grid-template-columns: 1fr; }
+.ob-card {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  min-width: 0; min-height: 96px; padding: 14px 6px 12px; border: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font: inherit; text-align: center; cursor: pointer; box-shadow: var(--shadow);
+  transition: transform .12s ease, border-color .15s, background-color .15s; -webkit-tap-highlight-color: transparent;
+}
+.ob-card:active { transform: scale(.95); }
+.ob-card:focus-visible { outline: 3px solid var(--accent-glow); outline-offset: 2px; }
+.ob-card[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.ob-card b { font-size: 15px; line-height: 1.3; font-weight: 700; }
+.ob-card small { font-size: 12px; line-height: 1.35; color: var(--muted); }
+.ob-ic { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--icon-bg); color: var(--ink-2); transition: background-color .15s, color .15s; }
+.ob-ic svg.i { width: 26px; height: 26px; }
+.ob-ic .dot { fill: var(--accent); stroke: none; }
+.ob-card[aria-pressed="true"] .ob-ic { background: var(--accent); color: var(--accent-ink); }
+.ob-card[aria-pressed="true"] .ob-ic .dot { fill: var(--accent-ink); }
+.ob-tick { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); opacity: 0; transform: scale(.4); transition: opacity .15s, transform .15s; }
+.ob-tick svg.i { width: 12px; height: 12px; stroke-width: 3; }
+.ob-card[aria-pressed="true"] .ob-tick { opacity: 1; transform: none; }
+.ob-grid.one .ob-card { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: 64px; padding: 10px 14px; text-align: left; }
+.ob-grid.one .ob-card b { flex: none; }
+.ob-grid.one .ob-card .ob-ic { width: 40px; height: 40px; }
+.ob-grid.four .ob-card, .ob-grid.five .ob-card { min-height: 78px; padding: 10px 2px; }
+.ob-grid.four .ob-ic { width: 40px; height: 40px; }
+.ob-big { font-size: 28px; line-height: 1; font-weight: 800; }
+.ob-grid.five .ob-card b { font-size: 13px; color: var(--muted); }
+.ob-measure { display: flex; flex-direction: column; gap: 8px; padding: 18px 4px 4px; }
+.ob-num-wrap { display: flex; align-items: baseline; justify-content: center; gap: 6px; }
+.ob-num { width: 4.2ch; padding: 0; border: 0; border-bottom: 2px solid var(--line); background: transparent; color: var(--ink); font: inherit;
+  font-size: 52px; line-height: 1.1; font-weight: 800; text-align: center; -moz-appearance: textfield; }
+.ob-num::-webkit-inner-spin-button, .ob-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.ob-num:focus { outline: 0; border-bottom-color: var(--accent); }
+.ob-unit { font-size: 16px; font-weight: 700; color: var(--muted); }
+.ob-ruler { width: 100%; height: 48px; margin: 6px 0 0; -webkit-appearance: none; appearance: none; background: transparent; cursor: grab; }
+.ob-ruler::-webkit-slider-runnable-track { height: 34px; border-radius: 10px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 2px, transparent 2px 10px) bottom / 100% 14px no-repeat,
+              repeating-linear-gradient(90deg, var(--muted) 0 2px, transparent 2px 50px) bottom / 100% 26px no-repeat, var(--sunken); }
+.ob-ruler::-moz-range-track { height: 34px; border-radius: 10px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 2px, transparent 2px 10px) bottom / 100% 14px no-repeat,
+              repeating-linear-gradient(90deg, var(--muted) 0 2px, transparent 2px 50px) bottom / 100% 26px no-repeat, var(--sunken); }
+.ob-ruler::-webkit-slider-thumb { -webkit-appearance: none; width: 6px; height: 46px; margin-top: -6px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow); }
+.ob-ruler::-moz-range-thumb { width: 6px; height: 46px; border: 0; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow); }
+.ob-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.ob-wheels { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; padding-top: 10px; }
+.ob-wheel { display: flex; flex-direction: column; align-items: stretch; gap: 4px; text-align: center; }
+.ob-wheels .ob-wheel select { flex: 1; min-width: 0; height: 56px; padding: 0 8px; border: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 20px; font-weight: 700; text-align: center; }
+.ob-wheels .ob-wheel select:focus { outline: 0; border-color: var(--accent); }
+.ob-wheel span { flex: none; font-size: 14px; color: var(--muted); }
+.ob-note { height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; }
+.ob-msg:empty { display: none; }
+.ob-foot { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 8px; }
+.ob-skip { align-self: center; min-height: 44px; }
+@media (prefers-reduced-motion: reduce) { .ob-card, .ob-tick, .ob-bar i { transition: none; } .ob-card:active { transform: none; } }
+
+/* 饮食记录（§245）：配图圆形；记过的右边替换图标；往左滑露出删除；替换前的确认框 */
+.tp-thumb { border-radius: 50%; }
+.tp-end { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.tp-swap { width: 36px; height: 36px; min-width: 36px; color: var(--accent-text); }
+.swipe { position: relative; overflow: hidden; }
+.swipe-face { position: relative; z-index: 1; background: var(--surface); touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.swipe-del { position: absolute; top: 0; right: 0; bottom: 0; width: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 0; background: var(--heat); color: var(--accent-ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.swipe-del svg.i { stroke: currentColor; }
+.swipe:not(.show) .swipe-del { visibility: hidden; }
+.swipe + .swipe .tp-meal, .tp-list > .swipe:not(:first-child) .tp-meal { border-top: 1px solid var(--line); }
+.sure-root { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; }
+.sure-overlay { position: absolute; inset: 0; background: rgb(20 16 30 / 45%); }
+.sure-box { position: relative; width: min(340px, 100%); padding: 20px 18px 16px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-lg); }
+.sure-box p { margin: 0 0 16px; font-size: 16px; line-height: 1.5; color: var(--ink); }
+.sure-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sure-btns .btn { width: 100%; }
+
+/* 带单位的数能左右拖（§246）：格子底下一排细刻度，一格 12 像素对应拖一格；拖的时候刻度跟着走、变主色 */
+input.scrub {
+  cursor: ew-resize; touch-action: pan-y;
+  background-image: repeating-linear-gradient(90deg, rgb(117 117 136 / 32%) 0 1px, transparent 1px 12px) !important;
+  background-repeat: repeat-x !important; background-size: 100% 5px !important; background-position-y: calc(100% - 2px) !important;
+}
+input.scrub:focus { cursor: text; }
+.qa-val { display: flex; align-items: baseline; justify-content: center; gap: 2px; min-width: 0; }
+input.qa-w { width: 4.4ch; min-width: 0; height: auto; padding: 0 2px 8px; border: 0; border-radius: 10px; box-shadow: none; background-color: transparent;
+  color: var(--ink); font: inherit; font-size: 32px; font-weight: 300; line-height: 1.2; text-align: center; -moz-appearance: textfield; }
+input.qa-w::-webkit-inner-spin-button, input.qa-w::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input.qa-w:focus { outline: 0; box-shadow: inset 0 -2px 0 var(--accent); }
+input.scrub.dragging { cursor: grabbing; box-shadow: 0 0 0 2px var(--accent) !important;
+  background-image: repeating-linear-gradient(90deg, var(--accent) 0 1px, transparent 1px 12px) !important; background-size: 100% 7px !important; }
+
+/* 选几点、同一餐多条、今天删掉的（§247） */
+.time-row, .sheet label.time-row, .kind-pick label.time-row { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; margin-top: 8px; text-align: left; }
+.time-row .time-pick { width: auto; min-width: 118px; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; }
+.tp-at { margin-left: 6px; font-size: 12px; color: var(--muted); }
+.tp-more { width: 36px; height: 36px; min-width: 36px; color: var(--accent-text); }
+.tp-meal .swipe + .swipe { border-top: 1px dashed var(--line); }
+.tp-gone { margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.tp-gone summary { cursor: pointer; padding: 6px 0; }
+.tp-gone ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.tp-gone li { display: flex; flex-direction: column; gap: 1px; color: var(--ink-2); }
+.tl-at { display: block; font-size: 11px; color: var(--muted); }
+
+/* 记一顿（§248）：照片方块在左，哪一餐和几点在右；下面备注、认一下、逐样克数、加一样、合计、记下 */
+.meal-form { display: flex; flex-direction: column; gap: 10px; }
+.meal-form .section-head { margin: 0; }
+.mf-top { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: start; }
+.mf-pick { position: relative; display: block; cursor: pointer; }
+.mf-shot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 96px; height: 96px;
+  border: 2px dashed var(--line); border-radius: 50%; background: var(--sunken); color: var(--muted); overflow: hidden; text-align: center; }
+.mf-shot small { font-size: 12px; line-height: 1.3; padding: 0 8px; }
+.mf-shot.on { border-style: solid; border-color: var(--accent); }
+.mf-shot img { width: 100%; height: 100%; object-fit: cover; }
+.mf-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mf-kinds .pills { flex-wrap: wrap; }
+.mf-time .time-row { margin-top: 0; }
+.mf-shot-off { align-self: flex-start; font-size: 13px; }
+.mf-note { width: 100%; min-height: 56px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; resize: vertical; }
+.mf-look { display: flex; justify-content: flex-end; }
+.mf-look .btn { width: auto; }
+.mf-lines:empty { display: none; }
+.mf-msg:empty { display: none; }
+.mf-replacing { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-text); font-size: 14px; font-weight: 600; }
+.mf-usual { margin-top: 4px; }
+/* 下面的记录（§248）：每条一张小圆图、名字、几点、替换图标；有计划的那顿一个"按计划吃" */
+.tp-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tp-row .tp-name { flex: 1; min-width: 0; color: var(--ink); font-size: 14.5px; font-weight: 600; }
+.tp-row .tp-thumb { width: 40px; height: 40px; flex: none; border-radius: 50%; object-fit: cover; overflow: hidden; display: grid; place-items: center; }
+.tp-own img { width: 100%; height: 100%; object-fit: cover; }
+.tp-blank { background: var(--sunken); color: var(--muted); }
+.tp-byplan { white-space: nowrap; }
+.tp-meal.todo .tp-head b { color: var(--muted); }
+.tp-empty { margin: 8px 0; }
 
 /* ---- 消息（§235）：顶栏铃铛、消息页 ---- */
 .bar-right { justify-self: end; display: flex; align-items: center; gap: 6px; }  /* 顶栏还是三列：铃铛和头像一起放在右边那一列 */

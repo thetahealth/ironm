@@ -112,6 +112,8 @@ class Layers:
 
 
 def layers(items: Sequence[Item], today: date) -> Layers:
+    from ironm_agent.gear import FORM
+
     """把这个人的记忆分成画像、情景、该问的。被取代的不带；推测的只在画像里带"？"。"""
     out = Layers()
     n = 0
@@ -146,7 +148,8 @@ def layers(items: Sequence[Item], today: date) -> Layers:
     for x in kept:
         mark = "？" if x.status == "pending" else ""
         state = "（已好）" if x.status == "resolved" else ""
-        src = "推测的" if x.status == "pending" else "你说的" if x.origin != "data" else "训练记录"
+        src = ("推测的" if x.status == "pending" else "训练记录" if x.origin == "data"
+               else FORM if x.evidence == FORM else "你说的")  # 建档、档案表单填的（§244 需求 5）  # fmt: skip
         h = handle(x)
         stale = (
             "，很久没确认"
