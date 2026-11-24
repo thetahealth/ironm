@@ -17,6 +17,8 @@
 
 开源 · 打开网站就能用，也能自己部署 · 用你自己的大模型
 
+🧪 测评用 [mirobody-env](https://github.com/thetahealth/mirobody-env)：用来构造环境充分测试智能体
+
 **👉 现在就试：<https://ironm.mirobody.ai>**（不用安装，手机浏览器也能用）
 
 [English](README.md) · **简体中文**
