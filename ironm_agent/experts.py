@@ -1,6 +1,6 @@
-"""专业 Agent：先查依据，再回答。同一轮里各 Agent 互不可见。
+"""作答循环：先查依据，再回答（单 Agent，§87 起不再有多个专业角色）。
 
-被请到的 Agent 一定要从自己的专业角度回答这个问题：查到资料或用户数据的地方标出处，
+查到资料或用户数据的地方标出处，
 查不到的凭专业经验回答并标〔经验〕。每句按 checks 逐句核对，不合格让模型改一次；
 还不合格就 repair（对不上的个人数据句删掉，其余改标〔经验〕），不会因为查不到或核对不过而不说话。
 """
@@ -26,6 +26,7 @@ from ironm_agent.checks import (
     autocite,
     check_text,
     cited_ids,
+    loose_kinds,
     merge_echoes,
     repair,
     sentences,
@@ -65,6 +66,10 @@ class Opinion(ContractModel):
     # 改计划、新计划、记训练不再写在这里，由管家调用动作工具交给系统（§120）
     basis: tuple[str, ...] = ()  # 意见里引用到的编号：K 开头为依据库条目，r 开头为健康数据行
     general: bool = False  # 没有资料依据，只给不带具体数字的一般建议
+    # 给了几种可以挑的吃法、替换动作（§259，系统存成带编号的推荐）；答应要跟进的事（当场记成待跟进）
+    options: tuple[dict[str, Any], ...] = ()
+    follow_up: tuple[dict[str, Any], ...] = ()
+    check: str = ""  # 健康判断作答前的逐条核对（§270）：他看不到，只进运行记录
 
     def body(self) -> str:
         return self.answer
@@ -90,6 +95,7 @@ def _user_message(
     case: str = "",
     note: str = "",
     prefetched: str = "",
+    conversation: str = "",
 ) -> str:
     parts = [f"用户的问题：{text}"]
     for extra in (case, personal, memory, note):
@@ -97,7 +103,9 @@ def _user_message(
             parts.append(extra)
     if prefetched:
         parts.append("系统按问题先查好的资料（可以直接引用编号，不够再查）：\n" + prefetched)
-    if history:
+    if conversation:  # 最近几轮原文、各轮查到和做了的、更早的摘要（§254）
+        parts.append(conversation)
+    elif history:
         parts.append(
             "这次对话前面的几轮（只用来理解这次问题里的指代，不要在回答里重提和这次问题无关的旧话题）：\n"
             + "\n".join(history)
@@ -105,6 +113,9 @@ def _user_message(
     if concerns:
         names = {"discomfort": "身体不适", "special": "特殊人群"}
         parts.append("注意：这句话涉及" + "、".join(names.get(c, c) for c in concerns))
+    if case or conversation:  # 档案、状态每轮都带（§255）：最后再看一遍他这句，只答问的（11-23 "你好"被答成报计划）
+        parts.append(f"——\n他这一句：「{text}」。只答这一句问的；打招呼、道谢、闲聊只回一两句自然的话，"
+                     "不提计划、训练、饮食和数据。上面的档案、情况和前几轮是给你判断用的，他没问到的不讲。")
     return "\n\n".join(parts)
 
 
@@ -163,6 +174,14 @@ def _salvage(content: str, fields: Sequence[str]) -> dict[str, Any] | None:
                 out[k] = json.loads(f'"{m.group(1)}"')
             except json.JSONDecodeError:
                 continue
+    if "answer" not in out:  # 输出被截断、answer 没写完（§268）：取到最后一个整句，别因为格式回"没答上来"
+        m = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)$', content)
+        whole = re.match(r"(?s)(.*[。！？!?])", m.group(1)) if m else None
+        if whole and len(whole.group(1)) >= 6:
+            try:
+                out["answer"] = json.loads(f'"{whole.group(1)}"')
+            except json.JSONDecodeError:
+                pass
     return out or None
 
 
@@ -190,6 +209,12 @@ def _parse(role: Role, content: str, question: str = "") -> Opinion | None:
     if is_slots(raw):  # 按分段写的：由代码拼成正文、按问题类型限长（§38）
         raw = {**raw, "answer": assemble(raw, question)}
     data: dict[str, Any] = {k: raw.get(k) for k in ("general", *fields) if k in raw}
+    for k in ("options", "follow_up"):  # §259：结构化的推荐、待跟进，不进正文
+        if isinstance(raw.get(k), list):
+            data[k] = tuple(x for x in raw[k] if isinstance(x, dict))
+    if raw.get("check"):  # §270：核对不进正文
+        c = raw["check"]
+        data["check"] = "\n".join(map(str, c)) if isinstance(c, list) else str(c)
     data["speak"] = True  # 被请到就要回答，模型说"不发言"也不算
     for k in fields:
         if k in data and not isinstance(data[k], str):
@@ -260,8 +285,22 @@ def _patched(
     return opinion.model_copy(update={"answer": answer, "basis": tuple(cited_ids(answer))})
 
 
+_ORPHAN = re.compile(r"([。！？；;])[，,、；;]+|[，,、]+([。！？])|，，+|。。+")
+
+
+def tidy(text: str) -> str:
+    """删掉核对不过的句子、分句后留下的断句（"急诊。，按 R10b""；，"）收拾干净（§268）。"""
+    def fix(m: re.Match[str]) -> str:
+        return m.group(1) or m.group(2) or m.group(0)[0]
+
+    out = _ORPHAN.sub(fix, text)
+    return re.sub(r"(?m)^[，,、；;]+", "", out)
+
+
 def _settled(opinion: Opinion, desk: Desk | None, trace: dict[str, Any]) -> Opinion:
-    """提醒过还是说了改却没改：去掉说已经改了、记下了的那几句（§120）。"""
+    """提醒过还是说了改却没改：去掉说已经改了、记下了的那几句（§120）；收拾删句留下的断句（§268）。"""
+    if opinion.speak and any(tidy(getattr(opinion, f)) != getattr(opinion, f) for f in _FIELDS):
+        opinion = opinion.model_copy(update={f: tidy(getattr(opinion, f)) for f in _FIELDS})
     if desk is None or not opinion.speak or not opinion.answer:
         return opinion
     answer = desk.settle(opinion.answer)
@@ -369,6 +408,9 @@ async def _loop(
                 messages.append({"role": "assistant", "content": reply.content})
                 messages.append({"role": "user", "content": nudge})
                 continue
+        if opinion is None:  # 记下格式失败的样子（§268：查偶发"没答上来"），不记内容
+            trace["format_fail"] = {"len": len(reply.content), "json": reply.content.lstrip().startswith(("{", "```")),
+                                    "answer_key": '"answer"' in reply.content}  # fmt: skip
         problems = (
             ["输出不是规定格式的 JSON"]
             if opinion is None
@@ -378,6 +420,10 @@ async def _loop(
             return _settled(opinion, desk, trace)
         if fixes == 0:
             trace["checks"] = problem_kinds(problems)  # 只留类别，问题原文里可能有回答片段
+            if opinion is not None:  # 对不上的数各属于哪一类（§256，只记个数）
+                ev = toolbox.evidence
+                trace["loose"] = loose_kinds(opinion.answer, entries=ev.entries, calcs=ev.calcs, support=ev.support,
+                                             question=text, found=[r for *_, r in toolbox.said])  # fmt: skip
             trace["fixed"] = True
         if fixes >= 1:
             if opinion is None:

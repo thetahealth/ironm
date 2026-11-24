@@ -150,7 +150,7 @@ async def read_text(user_id: str, text: str, day: date, where: str, deps: Any, l
     # 对话里接着上一句的（"好多了"回的是"好些了吗"）：管家的问话在回答末尾，取结尾；他的话取开头
     before = "".join(f"前面：{x[:200] if x.startswith('用户') else '…' + x[-200:]}\n" for x in context[-2:])
     messages = [{"role": "system", "content": _READ_PROMPT.format(where=where)},
-                {"role": "user", "content": f"{before}{day.month}月{day.day}日{where}：{text[:200]}"}]  # fmt: skip
+                {"role": "user", "content": f"{before}{day.month}月{day.day}日{where}：{text[:2000]}"}]  # fmt: skip  # 他这一句不截（§267），只防异常
     try:
         reply = await llm.chat("coach", messages, tools=[RECORD_STATE_SCHEMA])
     except Exception as e:

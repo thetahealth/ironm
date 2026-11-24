@@ -1,6 +1,6 @@
 """身体不适与特殊人群的判断（concerns_of）：管家作答时提醒这句话涉及哪类情况。
 
-规程怎么选在 skill_route.py（模型路由，出错按关键词）。
+规程由作答的模型看目录自己装（§255）。
 """
 
 from __future__ import annotations

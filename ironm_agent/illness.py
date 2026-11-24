@@ -29,7 +29,6 @@ type Mode = Literal["rest", "light", "ease"]  # 休息 / 轻松版 / 病后第�
 SILENT_DAYS = 3  # 连续这么多天没回答就不再问，这次生病不再当成现在的情况
 UNWELL_TIMES = 3  # 连续这么多次"还不舒服"建议就医
 FEVER_DAYS = 3  # 发烧这么多天还没好建议就医
-EASE = 0.7  # 病后第一次训练按约七成
 AFTER_DAYS = 2  # 好了之后这么多天内没做到的组次不触发减重量
 RECUR_DAYS, RECUR_TIMES = 28, 2  # 4 周内病了 2 次以上：提示减量
 _RANK: dict[Level, int] = {"above": 0, "vague": 0, "below": 1, "fever": 2}
@@ -198,7 +197,7 @@ def doctor(ep: Episode, today: date) -> str:
         unwell += 1
     fever_days = (today - ep.started).days + 1 if ep.level == "fever" and ep.active else 0
     if unwell >= UNWELL_TIMES or fever_days > FEVER_DAYS:
-        return f"{ep.what()}已经好几天了，建议去看医生；想先问问可以找康复恢复师。"
+        return f"{ep.what()}已经好几天了，建议去看医生；想先问问可以问管家。"
     return ""
 
 
@@ -294,16 +293,6 @@ async def trained(store: IllnessStore, user_id: str, day: date) -> bool:
     except Exception as e:
         _log.warning("illness update failed: error_type=%s", type(e).__name__)
         return False
-
-
-def state_line(eps: Sequence[Episode], today: date) -> str:
-    """交给所有角色的一句身体状态（生病还在进行时）。"""
-    now = active(eps, today)
-    if not now:
-        return ""
-    e = now[0]
-    how = "好一些了" if e.status == "better" else "还没好"
-    return f"{e.started.month} 月 {e.started.day} 日开始{e.what()}，现在{how}"
 
 
 def summary_line(eps: Sequence[Episode], today: date, within: int = 2) -> str:

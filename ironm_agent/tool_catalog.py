@@ -52,6 +52,8 @@ CATALOG: tuple[Tool, ...] = (
          "diet_templates", personal=True, note="目录和单份内容，按热量目标算每顿几份；要换用 propose_diet_plan 出卡片，他确认才换（§184、§190）"),
     Tool("连锁店菜单库", "iron-m", "chain_menu", frozenset({"nutrition", "general"}),
          note="查品牌官网的热量和蛋白质、算几样的合计；只读菜单库，不读本人数据（§214）"),
+    Tool("算化验变化", "iron-m", "lab_change", frozenset({"recovery", "general"}),
+         note="两次化验变了多少、和参考变化量（正常波动）比；只算幅度，来源由作答的模型判断（§271）"),
     Tool("疼痛判断", "iron-m", "pain_check", frozenset({"recovery", "general"}), "pain_check",
          personal=True, note="运动场景分流，不做诊断"),
     Tool("指标趋势", "iron-m", "trend_analysis", EXPERTS, "trend_analysis", personal=True),

@@ -26,26 +26,20 @@ _log = logging.getLogger("ironm_agent.harness")
 RETAIN_DAYS = 180
 SLOW_TURN_MS = 20_000
 SLOW_EXPERT_MS = 15_000
-CLOSE_GAP = 0.2  # 路由前两名的加权分相差不到这么多：分不清该请谁
 EXPERIENCE_HIGH = 0.5  # 标〔经验〕的句子过半：知识库缺这块
 REPHRASE_SIMILAR = 0.5  # 和上一句的相似度（相邻两字的重合）不低于这个：换个说法再问
 ROLE_NAMES = {"trainer": "训练教练", "nutrition": "营养师", "recovery": "康复恢复师"}
 
 type Stage = Literal[
-    "safety", "route", "knowledge", "tool", "data", "answer", "compose", "plan", "perf", "outcome"
+    "safety", "knowledge", "tool", "data", "answer", "compose", "plan", "perf", "outcome"
 ]
 STAGE_NAMES: dict[str, str] = {
-    "safety": "安全判断", "route": "路由", "knowledge": "资料", "tool": "工具", "data": "数据",
+    "safety": "安全判断", "knowledge": "资料", "tool": "工具", "data": "数据",
     "answer": "作答", "compose": "整合", "plan": "计划", "perf": "性能", "outcome": "结果",
 }  # fmt: skip
 
 # 每种信号：归到哪个环节、给人看的名字；good 为 True 的是正面反馈（不算出错）
 SIGNALS: dict[str, tuple[str, str]] = {
-    "route_close": ("route", "前两名分数接近"),
-    "route_disagree": ("route", "三路意见不一致"),
-    "route_fallback": ("route", "按关键词兜底"),
-    "route_missed": ("route", "回答里提到该请却没请的角色"),
-    "declined_scope": ("route", "判为超出范围、没请专业角色"),
     "kb_empty": ("knowledge", "查资料查空"),
     "experience_high": ("knowledge", "标〔经验〕的句子过半"),
     "tool_error": ("tool", "工具调用失败"),
@@ -55,8 +49,6 @@ SIGNALS: dict[str, tuple[str, str]] = {
     "health_failed": ("data", "健康数据读取失败"),
     "health_empty": ("data", "查了没有记录"),
     "snapshot_failed": ("data", "没读到档案"),
-    "data_not_queried": ("data", "问到指标却没查到数据"),
-    "indicator_missing": ("data", "问到的指标没有记录"),
     "expert_silent": ("answer", "专业 Agent 没发言"),
     "expert_failed": ("answer", "专业 Agent 失败"),
     "check_fixed": ("answer", "核对第一次没通过、改写后通过"),
@@ -65,7 +57,6 @@ SIGNALS: dict[str, tuple[str, str]] = {
     "compose_repaired": ("compose", "整合被规则修正"),
     "constraint": ("compose", "约束第一次没通过"),
     "constraint_fixed": ("compose", "改写后仍不过关、注明了限制"),
-    "compose_fallback": ("compose", "退回主责角色的意见"),
     "preview_invalid": ("plan", "没写出合格的计划或记录"),
     "plan_check": ("plan", "计划检查不通过或只改好一部分"),
     "slow_turn": ("perf", "整轮超过 20 秒"),
@@ -80,7 +71,6 @@ SIGNALS: dict[str, tuple[str, str]] = {
     "rating_up": ("outcome", "点了有用"),
 }
 GOOD = frozenset({"rating_up"})
-FEEDBACK = frozenset({"rating_down", "rephrase", "user_says_wrong", "safety_disputed", "rating_up"})
 
 _WRONG = re.compile(
     r"^\s*(不对|不是|错了|你说错|说错了|没回答|答非所问|不是这个意思|我不是问|我问的是|你没懂|没听懂)"
@@ -102,6 +92,8 @@ def problem_kinds(problems: Iterable[str]) -> list[str]:
             kind = "bad_ref"
         elif "没有标出处" in p:  # 带数字的句子没写出处（§165：以前因为说明里有 <statement> 被算成格式）
             kind = "uncited"
+        elif "里的热量" in p and "没有出处" in p:  # 经验句里凭记忆写的热量（§256）
+            kind = "kcal"
         elif "JSON" in p or "规定格式" in p or "意见是空的" in p or "<statement>" in p:
             kind = "format"
         elif "数据行里找不到" in p:
@@ -172,26 +164,8 @@ def diagnose(run: Mapping[str, Any]) -> list[Signal]:
     """按这一轮的运行记录和各环节明细，用规则找出错信号。"""
     out: list[Signal] = []
     add = out.append
-    route = run.get("route") or {}
-    weighted = sorted((route.get("weighted") or {}).values(), reverse=True)
-    if len(weighted) >= 2 and weighted[0] > 0 and weighted[0] - weighted[1] < CLOSE_GAP:
-        add(Signal("route_close"))
-    tops = {
-        c: max(s, key=s.get)
-        for c, s in (route.get("channels") or {}).items()
-        if s and max(s.values()) > 0
-    }
-    if len(set(tops.values())) > 1:
-        add(Signal("route_disagree", detail="/".join(f"{c}:{r}" for c, r in sorted(tops.items()))))
-    if run.get("route_by") == "keyword" and route:
-        add(Signal("route_fallback"))
-    # 判成超出范围：便于发现把训练问题误判成超出范围（spec [2026-10-23] §41）
-    if route.get("intent") == "out_of_scope":
-        add(Signal("declined_scope"))
     for x in run.get("_experts") or []:
         role = x.get("role", "")
-        for m in x.get("mentions") or []:
-            add(Signal("route_missed", role, m))
         for call in x.get("calls") or []:
             tool, result = call.get("tool", ""), call.get("result")
             if result == "error":
@@ -234,15 +208,8 @@ def diagnose(run: Mapping[str, Any]) -> list[Signal]:
         add(Signal("constraint", detail=",".join(run["constraints"])))
     if run.get("constraint_fixed"):
         add(Signal("constraint_fixed"))
-    if c.get("degraded"):
-        add(Signal("compose_fallback"))
     if run.get("snapshot_failed"):
         add(Signal("snapshot_failed"))
-    pre = run.get("prefetch") or {}
-    if pre.get("asked") and not pre.get("ok"):
-        add(Signal("data_not_queried", detail=str(pre["asked"])))
-    elif pre.get("asked") and not pre.get("rows"):
-        add(Signal("indicator_missing", detail=str(pre["asked"])))
     if run.get("preview") == "invalid":
         add(Signal("preview_invalid"))
     if run.get("plan_check") in ("failed", "partly"):
@@ -529,7 +496,6 @@ def turn_brief(t: Turn) -> dict[str, Any]:
         "roles": [ROLE_NAMES.get(r, r) for r in tr.get("roles") or []],
         "skills": tr.get("skills") or {},
         "route_tops": tops,
-        "skills_by": tr.get("skills_by") or {},
         "task": tr.get("task"),
         "experts": [
             {
@@ -546,7 +512,6 @@ def turn_brief(t: Turn) -> dict[str, Any]:
                     "forced",
                     "experience",
                     "ms",
-                    "mentions",
                 )
             }
             for x in tr.get("experts") or []

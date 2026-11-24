@@ -1,8 +1,8 @@
 """对话里的图片和报告（spec [2026-10-23] §11）。
 
 - 只读本人上传的附件：附件在 mirobody 的文件表里属于这个人（上传时 mirobody 已经把这一轮的附件登记好）；
-- 图片：交给能看图的模型读（饭菜照片由营养估算热量和蛋白质）；大图先缩小再交给模型；HEIC 读不了，如实说明；
-- 报告文件：mirobody 照常放进"我的文件"并自动识别；PDF 有文字层的，把读出的文字交给专业角色据此回答，
+- 图片：交给能看图的模型读（饭菜照片估算热量和蛋白质）；大图先缩小再交给模型；HEIC 读不了，如实说明；
+- 报告文件：mirobody 照常放进"我的文件"并自动识别；PDF 有文字层的，把读出的文字交给作答的模型据此回答（放不下按重要性取，§267），
   读不出文字的（扫描件）说明正在识别，不编造报告内容。
 日志只记附件的个数和类型，不记文件名和内容。
 """
@@ -13,6 +13,7 @@ import asyncio
 import base64
 import logging
 import mimetypes
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +23,9 @@ _log = logging.getLogger("ironm_agent.attachments")
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 对话附件的上限（和网页一致）
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 交给模型的单张图片上限：更大的先缩小，缩不下来就不读
 MAX_IMAGES = 3
-MAX_REPORT_CHARS = 4000  # 报告文字交给专业角色的上限
+MAX_REPORT_CHARS = 20000  # 报告文字交给作答模型的防异常上限；超了按重要性取（fit_report，§260、§267），不截头
+# 报告里要紧的行：总检结论和建议、异常项、心电图 B 超骨密度这类检查的结论
+IMPORTANT = re.compile(r"总检|结论|建议|诊断|印象|提示|异常|阳性|偏高|偏低|↑|↓|\bH\b|\bL\b|心电图|超声|B\s*超|彩超|骨密度|胸片|眼底|复查|就诊")
 _HEIC = (".heic", ".heif")
 _IMAGE = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif")
 
@@ -51,11 +54,8 @@ class Attachments:
     skipped: tuple[str, ...] = ()  # 读不了的（不是本人的、太大、取不到、HEIC）
 
     def note_for_user(self) -> str:
-        """回答开头给用户的一句话（只说收到了什么、读不了什么）。"""
+        """回答开头给用户的一句话：只说读不了什么（收到了什么放在回答最后，§271）。"""
         parts = []
-        if self.reports:
-            names = "、".join(f"《{x.name}》" for x in self.reports)
-            parts.append(f"已收到你上传的{names}，识别出的指标会出现在「数据」页的「我的文件」里。")
         if self.skipped:
             parts.append(
                 f"有 {len(self.skipped)} 个附件这次没能读取（太大、HEIC 格式或不是你的文件），"
@@ -63,7 +63,15 @@ class Attachments:
             )
         return "".join(parts)
 
-    def note_for_experts(self) -> str:
+    def received(self) -> str:
+        """回答最后一句：收到了哪些文件（§271：第一句留给结论）。"""
+        if not self.reports:
+            return ""
+        names = "、".join(f"《{x.name}》" for x in self.reports)
+        return f"{names}已收到，识别出的指标在「数据」页「我的文件」里。"
+
+    def note_for_experts(self, ids: Mapping[str, str] | None = None) -> str:
+        """ids：报告名 → 登记成可引用来源的编号（§265），用到报告里的数时写这个编号。"""
         lines = []
         if self.images:
             lines.append(
@@ -71,9 +79,10 @@ class Attachments:
             )
         for x in self.reports:
             if x.text:
+                cite = f"用到里面的数时写〔{ids[x.name]}〕；" if ids and x.name in ids else ""
                 lines.append(
                     f"用户上传的报告《{x.name}》里读到的文字（系统从 PDF 读出，可能不完整；"
-                    f"只按读到的说，不诊断）：\n{x.text}"
+                    f"{cite}只按读到的说，不诊断）：\n{x.text}"
                 )
             else:
                 lines.append(
@@ -98,6 +107,35 @@ async def _owned(user_id: str, keys: Sequence[str]) -> set[str]:
     return {str(r["file_key"]) for r in rows or []}
 
 
+def fit_report(text: str, limit: int = MAX_REPORT_CHARS) -> str:
+    """报告文字放得下就全放；放不下先放要紧的行（结论、建议、异常项、检查结论），再按原顺序补其余的，
+    保持原来的先后；去掉的地方注明（§260：按重要性去掉，不截头）。"""
+    if len(text) <= limit:
+        return text
+    # 没换行或一行太长的（有的 PDF 读出来是一整段）：先按句子拆开再取
+    lines = [s for line in text.splitlines()
+             for s in (re.split(r"(?<=[。；;！？!?])", line) if len(line) > limit // 10 else [line]) if s]  # fmt: skip
+    keep = [False] * len(lines)
+    used = 0
+    for important in (True, False):
+        for i, line in enumerate(lines):
+            if keep[i] or bool(IMPORTANT.search(line)) != important:
+                continue
+            if used + len(line) + 1 > limit:
+                continue
+            keep[i] = True
+            used += len(line) + 1
+    out, dropped = [], False
+    for line, k in zip(lines, keep, strict=True):
+        if k:
+            out.append(line)
+            dropped = False
+        elif not dropped:
+            out.append("……（这里放不下，略去不太要紧的内容）")
+            dropped = True
+    return "\n".join(out)
+
+
 def _shrink(data: bytes, mime: str) -> tuple[bytes, str]:
     from mirobody.documents.extract import downscale_image
 
@@ -110,7 +148,7 @@ async def _pdf(data: bytes) -> str:
     from mirobody.documents.extract import pdf_text
 
     try:
-        return str(await pdf_text(data))[:MAX_REPORT_CHARS]
+        return fit_report(str(await pdf_text(data)))
     except Exception as e:
         _log.warning("report text unavailable: error_type=%s", type(e).__name__)
         return ""

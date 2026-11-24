@@ -1,8 +1,7 @@
 """单 Agent（spec [2026-10-23] §67）：一个 Agent 回答所有问题，规程（Skill）按需装载，工具由它按需调用。
 
-和专业角色共用同一套作答循环（查询次数上限、逐句核对出处和数字、不合格改一次、再不合格修正）；
-不同的是：不分角色、不经调度和整合；涉及哪个领域就带上那个领域的判断规则；可以自己再装一份 Skill、
-查 App 用法；要不要改计划、排新计划、记训练由它看上下文判断，写在回答的 JSON 里，由系统执行。
+作答循环（查询次数上限、逐句核对出处和数字、不合格改一次、再不合格修正）在 experts.py；
+规程目录每份一行，用到再装（§255、§263）；可以查 App 用法；要不要改计划、排新计划、记训练由它看上下文判断，写在回答的 JSON 里，由系统执行。
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from ironm_agent.experts import (
 )
 from ironm_agent.frameworks import FRAMEWORKS, flag_refs, flags_of, framework_refs
 from ironm_agent.llm import LLM, ModelUnavailable
+from ironm_agent.memory import Conversation, conversation_text
 from ironm_agent.memory_store import CATEGORIES, Item
 from ironm_agent.memory_view import Recall, until_text
 from ironm_agent.personal import Personal
@@ -47,8 +47,8 @@ LOAD_SKILL_SCHEMA: dict[str, Any] = {
     "function": {
         "name": LOAD_SKILL,
         "description": (
-            "再装一份规程（决策卡：管哪几个决定、判断要点、怎么说），或者取已装规程的某一节细节。"
-            "id 从系统提示里的规程目录里选；要细节时带 section（决策卡后面列的分节编号或名字，写「全部」取整份）。"
+            "装一份规程（开头一张卡：管哪几个决定或做事步骤、判断要点、怎么说），或者取已装规程的某一节细节。"
+            "id 从系统提示里的规程目录里选；要细节时带 section（卡片后面列的分节编号或名字，写「全部」取整份）。"
             "算营养、选方案、检查计划、判断疼痛、看趋势这类专业工具跟着规程走：工具列表里没有要用的，先装对应的规程。"
         ),
         "parameters": {
@@ -58,7 +58,7 @@ LOAD_SKILL_SCHEMA: dict[str, Any] = {
                 "id": {"type": "string", "description": "规程编号，如 plan-build"},
                 "section": {
                     "type": "string",
-                    "description": "要看的那一节：编号（如 5）或名字（如 选初步方案）；不写给决策卡",
+                    "description": "要看的那一节：编号（如 5）或名字（如 选初步方案）；不写给开头那张卡",
                 },
             },
             "required": ["id"],
@@ -85,6 +85,8 @@ async def _load_skill(box: Toolbox, args: Mapping[str, Any]) -> str:
     if skill is None:
         return "没有这个规程编号，请从目录里选。"
     box.adopt(e for r in skill.refs_for(box.flags) if (e := box.kb.get(r)) is not None)
+    if skill.id not in box.loaded:
+        box.loaded.append(skill.id)
     # 这份规程提到的专业工具这时才给（§212）：取一节也算装上了
     more = box.open_pro(box.pro_named(_skill_words(skill, box.flags)))
     which = str(args.get("section") or "").strip()
@@ -94,8 +96,10 @@ async def _load_skill(box: Toolbox, args: Mapping[str, Any]) -> str:
             return f"没有这一节。{skill.name}的分节：{skill.index()}"
         return part + ("\n\n装上后多了这些工具：" + "、".join(more) + "。" if more else "")
     text = skill.text(box.flags)
-    # 规程带的动作工具（改计划、新计划、记训练）这时才开放（§120）
-    opened = [*(box.actions.unlock(skill.toolset) if box.actions is not None else []), *more]
+    # 规程带的动作工具（改计划、新计划、记训练）这时才开放（§120）；装训练类规程时先确认条件的那个也给（§122）
+    desk = box.actions
+    tools = [*skill.toolset, *([ASK_TERMS] if skill.role == Role.TRAINER else [])]
+    opened = [*(desk.unlock(tools) if desk is not None else []), *more]
     if opened:
         text += "\n\n装上后多了这些工具：" + "、".join(opened) + "。"
     held = getattr(
@@ -124,15 +128,15 @@ _PROMPT = """你是健身 App 里的「AI 健身管家」：一位持证体能�
 
 先看上下文再答：
 1. 先判断这句话和前面的关系：新问题、对上一条回答的追问或质疑、补充条件、对计划预览的意见，还是闲聊。接着上一轮的，就接着上一轮答。被质疑时先核对你上一条回答和预览里实际说过什么：说错或漏了就认错并改正；没说错就用你说过的内容回答，不要顺着认错。
-2. 只答问的：第一句就是答案，原因放后面，没问到的不说，等他追问再展开。他一句话问了几件事，逐件答，按他问的顺序，每件先给答案。他提了要求（"给我安排个轻松的"），第一句先接住：能做就直接给，不能做再说为什么。他只说自己的状况（"今天有点不舒服""好累"）、没问怎么办时，关心一句、问怎么了，不主动给做法和安排。提起记忆和今天的状态像朋友当面说话：用问候或一句话带过（"前两天说感冒了，好点了吗"），不报日期，不转述系统的判断（"现在还没好"），他没问的计划安排（今天本来是休息日、病后第一次按几成）不说。超出健身、饮食、恢复、身体数据的问题，说明帮不上、能帮什么。不诊断、不开药。
+2. 只答问的：第一句就是答案，原因放后面，没问到的不说，等他追问再展开。他让你在几个选项里选一个（"四选一""是哪一种""去急诊还是在家观察"），第一句就说选的是哪个，再说依据和怎么办。做健康判断（化验变化、报告、用药、去不去医院、多急）时照「身体数据与临床」先核对，第一句结论后可以跟 2–4 条关键理由；他给了判断方法、医院规程或医生的标准，按那份判、说依据哪一条。他一句话问了几件事，逐件答，按他问的顺序，每件先给答案。他提了要求（"给我安排个轻松的"），第一句先接住：能做就直接给，不能做再说为什么。他只说自己的状况（"今天有点不舒服""好累"）、没问怎么办时，关心一句、问怎么了，不主动给做法和安排。提起记忆和今天的状态像朋友当面说话：用问候或一句话带过（"前两天说感冒了，好点了吗"），不报日期，不转述系统的判断（"现在还没好"），他没问的计划安排（今天本来是休息日、病后第一次按几成）不说。超出健身、饮食、恢复、身体数据的问题，说明帮不上、能帮什么。不诊断、不开药。
 3. 关于这个人的事实（状态、伤病、计划、记录、数据）只照档案、数据、记忆和对话说，不推测、不编造；数据不是最近 7 天的，说清那不是最近的（"上次""之前"），不当成现在的状态；给具体的量（组次、克数、分钟），数字用工具结果、档案或资料里的，不自己估。
-4. 需要信息就调用工具（这一轮能用的都在工具列表里），一轮可以调几次，拿到要的就作答；要查几样（几个动作、几条资料）就在同一次里一起调用，不要查一样等一样。问 App 怎么用时调用 app_help；问天气、哪天能在外面练调用 query_weather。装上的规程不够时调用 load_skill 再装一份（目录在下面）。
+4. 需要信息就调用工具（这一轮能用的都在工具列表里），一轮可以调几次，拿到要的就作答；要查几样（几个动作、几条资料）就在同一次里一起调用，不要查一样等一样。问 App 怎么用时调用 app_help；问天气、哪天能在外面练调用 query_weather。要拿主意、按步骤办事时调用 load_skill 装规程（目录在下面）。
 
 出处（系统会逐句核对）：用到资料的句子句末写〔K03〕，用到档案或计算结果写〔C2〕，凭经验写〔经验〕；用到他的健康数据写成 <statement>这句话<cite>[r3]</cite></statement>。带数字的句子都要有出处，数字照资料、计算或数据写。
 
 {record}说了量的体重、腰围这类数调用 log_body，说了吃了什么调用 log_meal；要换目标方向或定目标体重和日期调用 propose_goal（出卡片，他确认才改）；只记他说了的，问话、假设、别人的不记。
 
-可以再装的规程目录：
+规程目录（要拿主意、按步骤办事时，对得上下面哪份就先用 load_skill 装上照着做，可以和查数据、查资料放在同一次调用里一起调；打招呼、闲聊、简单回一句什么都不用装）：
 {catalog}
 
 计划和训练记录（只在需要时做；只是问问、抱怨、闲聊、解释时不做，计划不动）：
@@ -207,12 +211,6 @@ def memory_text(known: Mapping[str, Item], today: date) -> str:
     )
 
 
-def domains_of(skills: Sequence[Skill]) -> list[Role]:
-    """这一轮装上的规程涉及哪些领域（按训练、恢复、饮食的顺序）。"""
-    roles = {x.role for x in skills if x.role is not None}
-    return [r for r in (Role.TRAINER, Role.RECOVERY, Role.NUTRITION) if r in roles]
-
-
 def framework_for() -> str:
     """管家提示词里的专业部分只留各专业要点的总览；领域的判断规则从基础规程来（§74）。"""
     return FRAMEWORKS[Role.GENERAL]
@@ -238,13 +236,12 @@ async def respond(
     known: Mapping[str, Item] | None = None,
     memory_block: str | None = None,
     training: bool = True,
-    with_case: bool = True,
     record_after: bool = True,
+    conversation: Conversation | None = None,
 ) -> Consultation:
     """单 Agent 作答一轮。出错时返回不发言的意见，不向外抛（和专业角色一样）。
     training：这一轮涉及训练才放计划和记录的写法；不涉及时装上训练类规程再补（§96）。"""
     flags = flags_of([x.key for x in case.risks], bool(case.injuries))
-    domains = domains_of(skills)
     if (
         toolbox.actions is not None
     ):  # 规程带的动作工具（§120）；状态、读数、一餐每轮都给，涉及训练时先确认条件的那个也给（§122）
@@ -255,7 +252,7 @@ async def respond(
         )
     actions = actions_prompt(has_plan=has_plan, confirmed=confirmed, just_asked=just_asked)
     # 专业工具只给这一轮装着的规程提到的（§212）：没装规程的轮次（闲聊、记一餐）不带，中途装了再开
-    toolbox.pro_open = {n for x in skills for n in toolbox.pro_named(_skill_words(x, flags))}
+    toolbox.pro_open = {n for x in skills for n in toolbox.pro_named(_skill_words(x, flags))}  # 跟着装上的规程（§212）
     toolbox.actions_held = "" if training else actions
     system = _PROMPT.format(
         tone=BUDDY,
@@ -280,7 +277,7 @@ async def respond(
         text,
         history,
         concerns,
-        personal.text() if personal and with_case else "",  # 闲聊不给数据（§98）
+        personal.text() if personal else "",
         memory_block
         if memory_block is not None
         else memory_text(known, today or date.today())
@@ -288,10 +285,12 @@ async def respond(
         else memory.shared()
         if memory is not None
         else "",
-        case=case.text(calcs=True) if with_case else "",  # 闲聊不给档案（§98）
+        case=case.text(calcs=True),  # 每轮都带档案（§255）
         note=note,
-        # 只装了基础规程时最多按字面预取 2 条资料；装了内容规程（自带依据）或什么都没装（闲聊）时不预取（§96）
-        prefetched=toolbox.prefetch(text, k=2 if skills and all(x.core for x in skills) else 0),
+        # 依据按需查（§255）：不再按字面预取依据库；他点到名字的动作照旧带上动作库条目（名字对得上才带）
+        prefetched=toolbox.prefetch(text),
+        # 本会话前面的部分（§254）：最近几轮原文、各轮查到和做了的（登记成计算结果能引用）、更早的摘要
+        conversation=conversation_text(conversation, toolbox.add_calc) if conversation is not None else "",
     )
     content: str | list[Any] = [{"type": "text", "text": asked}, *images] if images else asked
     messages: list[dict[str, Any]] = [
@@ -303,7 +302,7 @@ async def respond(
         toolbox.evidence.support.update(personal.support)
         toolbox.evidence.rows.update(personal.rows)
     trace: dict[str, Any] = {"rounds": 0, "checks": [], "fixed": False, "repaired": False,
-                             "exhausted": False, "forced": False, "domains": [r.value for r in domains]}  # fmt: skip
+                             "exhausted": False, "forced": False}  # fmt: skip
     start = time.perf_counter()
     try:  # 一轮最多等 HARD_S 秒：到了就停下说没答上来，不等到超时重试完（§165）
         opinion = await asyncio.wait_for(

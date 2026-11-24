@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -36,7 +36,7 @@ OVER_REMAINING = 1.2  # 推荐一餐的热量超过今天剩余额度的 1.2 倍
 
 type MealKind = Literal["早餐", "午餐", "晚餐", "加餐", "夜宵", "练前", "练后"]
 type Appetite = Literal["清淡", "正常", "很饿"]
-# 覆盖全天的餐次；每种餐每天只留一条，再记一次就替换（spec [2026-10-23] §43）
+# 覆盖全天的餐次；同一种餐可以记多条（§247、§264，取代 §43 的只留一条）
 MEAL_KINDS: tuple[MealKind, ...] = ("早餐", "午餐", "晚餐", "加餐", "夜宵", "练前", "练后")
 
 
@@ -163,7 +163,7 @@ def meal_from(kind: MealKind, name: str, lines: Sequence[FoodLine], **extra: Any
 
 # ---- 估算 -----------------------------------------------------------------------------------
 
-_ESTIMATE = """你是健身 App 里的营养师，根据用户拍的照片和描述，说出这一餐有哪些食物、各多少。
+_ESTIMATE = """你是健身管家 IronM，根据用户拍的照片和描述，说出这一餐有哪些食物、各多少。
 
 做法：
 1. 认出每一样食物，写常见的叫法（米饭、番茄炒蛋、鸡胸肉），估吃下去的克数；描述里说的量（比如"吃了一半"）优先于照片。
@@ -311,7 +311,7 @@ class Recommendation(BaseModel):
         )
 
 
-_RECOMMEND = """你是健身 App 里的营养师，给用户推荐这一餐吃什么。
+_RECOMMEND = """你是健身管家 IronM，给用户推荐这一餐吃什么。
 
 要求：
 1. 先满足目标：今天还缺的蛋白质尽量在这一餐补上一部分；热量不要超出今天剩下的额度。
@@ -678,3 +678,51 @@ def default_meals() -> MealStore:
     if _default is None:
         _default = PgMeals()
     return _default
+
+
+def history_lines(meals: Sequence[StoredMeal], today: date, days: int, kcal: float | None = None,
+                  protein: float | None = None) -> str:
+    """查往日饮食（§261）：最近 days 天（不含今天，今天的在档案里）每天记了哪几顿、各是什么、合计和目标比；
+    没记的那天写没记，不当成没吃。"""
+    order = {k: i for i, k in enumerate(MEAL_KINDS)}
+    by: dict[date, list[StoredMeal]] = {}
+    for m in meals:
+        if m.deleted is None and today - timedelta(days=days) <= m.day < today:
+            by.setdefault(m.day, []).append(m)
+    if not by:
+        return f"最近 {days} 天没有饮食记录。"
+    lines = []
+    for i in range(days, 0, -1):
+        d = today - timedelta(days=i)
+        got = sorted(by.get(d, []), key=lambda m: (order.get(m.meal.kind, 99), m.created))
+        if not got:
+            lines.append(f"{d.month}月{d.day}日：没记")
+            continue
+        t = totals(got)
+        each = "；".join(f"{m.meal.kind}{m.meal.name}约 {round(m.meal.macros.kcal)} 千卡" for m in got)
+        vs = f"，目标约 {round(kcal)}" if kcal else ""
+        lines.append(f"{d.month}月{d.day}日：{each}；合计约 {round(t.kcal)} 千卡、蛋白质 {round(t.protein_g)} 克{vs}")
+    return "\n".join(lines) + ("" if protein is None else f"\n（蛋白质目标约 {round(protein)} 克）")
+
+
+MEAL_HISTORY = "meal_history"
+MEAL_HISTORY_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": MEAL_HISTORY,
+        "description": "查他最近几天吃了什么：每天记了哪几顿、各是什么、热量蛋白质合计和目标比（今天的在档案里，不用查）。"
+        "问这周吃得怎么样、昨天是不是吃多了、最近蛋白质够不够时用。",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"days": {"type": "integer", "description": "往前看几天，默认 7，最多 30"}},
+        },
+    },
+}
+
+
+async def record(store: Any, user_id: str, day: date, meal: Meal) -> tuple[StoredMeal, float]:
+    """记下一餐，返回存下的这条和今天一共多少千卡。同一种餐可以记多条，不替换原来的（§247、§264，和饮食页一样）。
+    对话里记（log_meal）和推荐下面点"记这顿"（§261）都走这里。"""
+    row = await store.add(user_id, day, meal)
+    return row, totals(await store.day(user_id, day)).kcal

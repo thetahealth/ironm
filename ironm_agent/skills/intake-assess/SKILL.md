@@ -5,7 +5,6 @@ name: 建档与目标
 use: 新用户刚来、要开始练、停练很久回来或要求评估；把想瘦想壮变成能衡量的目标、改目标
 brief: 新用户建档，定或改目标
 not_for: 目标定好后要排训练用「排训练计划」；已经在练、问今天练什么用「今天练不练」；只问每天吃多少用「饮食方案」
-when: [开始健身, 想开始练, 刚开始, 从哪开始, 评估, 新手, 零基础, 好久没练, 很久没练, 重新开始, 目标, 定目标, 想瘦, 想减, 减多少, 想壮, 增重, 多久能, 几个月能, 改目标, 目标合理]
 on: [new]
 tools: [recall_memory, query_health_indicators, training_patterns, trend_analysis, query_medications, search_medical_knowledge, nutrition_calc, app_help, propose_goal]
 refs: [K56, K03, K58, K15, K57, K37, K16, K01, K09]

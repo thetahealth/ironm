@@ -5,8 +5,6 @@ name: 今天练不练
 use: 问今天练不练、练什么、怎么调：累、没睡好、酸痛、时间变少，或者感冒发烧拉肚子这类生病；病好了怎么恢复训练
 brief: 今天练不练、怎么调、生病了
 not_for: 某个部位疼、受伤用「伤痛处理」；长期越练越累、重量上不去用「记训练与复盘」；停练很久回来用「排训练计划」
-when: [累, 没睡好, 状态, 今天练什么, 还练吗, 能练吗, 今天能练, 酸痛, 熬夜, 睡了, 疲劳, 心率变异性, 静息心率, 压力大, 只有半小时, 今天没时间, 不舒服, 感冒, 发烧, 发热, 生病, 咳嗽, 嗓子疼, 喉咙痛, 鼻塞, 流鼻涕, 拉肚子, 腹泻, 胃肠炎, 新冠, 阳了, 病好了, 刚好, 退烧]
-default: true
 tools: [query_health_indicators, trend_analysis, training_patterns, recall_memory, check_plan, adjust_today, propose_temporary_change]
 refs: [K18, K19, K28, K29, K35, K80, K81, K82, K08, K23, K14, K107, K108]
 ---

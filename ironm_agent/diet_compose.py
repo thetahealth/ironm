@@ -104,9 +104,16 @@ def resolve(code: str, mine: Sequence[Recipe] = ()) -> Dish | None:
 
 
 def avoided(d: Dish, avoid: Iterable[str]) -> list[str]:
-    """这顿里有他不吃的哪几样（返回他说的那个词）。"""
+    """这顿里有他不吃的哪几样（返回他说的那个词）；身体情况要避开的食物类别（高嘌呤、高钠……，§269）一样查。"""
+    from ironm_agent.body_limits import FOOD_GROUPS, in_group
+
     hits = []
     for word in (w.strip() for w in avoid if w and w.strip()):
+        if word in FOOD_GROUPS:
+            names = [d.name, d.text, *(f.name for f in d.foods)]  # 只看名字：别名太宽（熟牛肉也叫卤牛肉）
+            if any(in_group(x, word) for x in names):
+                hits.append(word)
+            continue
         key = _ALIASES.get(word, word)
         test = GROUPS.get(key)
         found = any((test(f) if test else (word in f.name or any(word in a for a in f.aka))) for f in d.foods)
@@ -165,7 +172,8 @@ class Day:
 
 
 def check_day(name: str, dishes: Mapping[str, Dish], kcal: float | None, protein: float | None,
-              avoid: Sequence[str]) -> Day:  # fmt: skip
+              avoid: Sequence[str], why: Mapping[str, str] | None = None, protein_cap: float | None = None) -> Day:  # fmt: skip
+    """why：身体情况要避开的食物类别 → 原因（§269）；protein_cap：一天蛋白质上限（克，肾负担时）。"""
     kinds = list(dishes)
     servings = dict(zip(kinds, fit([dishes[k] for k in kinds], kcal), strict=True))
     total = _total([dishes[k] for k in kinds], [servings[k] for k in kinds])
@@ -185,9 +193,18 @@ def check_day(name: str, dishes: Mapping[str, Dish], kcal: float | None, protein
             problems.append(f"{name}脂肪占热量 {share:.0%}（要在 {FAT_SHARE[0]:.0%}–{FAT_SHARE[1]:.0%}）："
                             + (f"{fat}（{dishes[fat].name}）油最多，换清淡的" if share > FAT_SHARE[1]
                                else "太素了，加点鱼、蛋、坚果"))  # fmt: skip
+    if protein_cap and total.protein_g > protein_cap:
+        high = max(kinds, key=lambda k: dishes[k].per.protein_g * servings[k])
+        problems.append(f"{name}蛋白质约 {round(total.protein_g)} 克，超过他的上限约 {round(protein_cap)} 克（肾功能偏低〔K127〕）："
+                        f"把{high}（{dishes[high].name}）换成蛋白质少的")  # fmt: skip
     for k in kinds:
         if hit := avoided(dishes[k], avoid):
-            problems.append(f"{name}{k}（{dishes[k].name}）里有他不吃的{'、'.join(hit)}：换掉")
+            body = [w for w in hit if why and w in why]
+            own = [w for w in hit if w not in body]
+            if own:
+                problems.append(f"{name}{k}（{dishes[k].name}）里有他不吃的{'、'.join(own)}：换掉")
+            if body:
+                problems.append(f"{name}{k}（{dishes[k].name}）里有{'、'.join(body)}的东西（{'；'.join(why[w] for w in body)}）：换掉")  # type: ignore[index]
     return Day(dict(dishes), servings, total, tuple(problems))
 
 
@@ -212,7 +229,8 @@ class Composed:
 
 
 def compose(args: Mapping[str, Any], kcal: float | None, protein: float | None, mine: Sequence[Recipe] = (),
-            avoid: Sequence[str] = ()) -> Composed:  # fmt: skip
+            avoid: Sequence[str] = (), why: Mapping[str, str] | None = None,
+            protein_cap: float | None = None) -> Composed:  # fmt: skip
     """args：{"weekday": {"早餐": "recipe:…", …}, "weekend": {…}}；周末没写就和工作日一样。"""
     problems: list[str] = []
     days: dict[str, Day] = {}
@@ -232,7 +250,7 @@ def compose(args: Mapping[str, Any], kcal: float | None, protein: float | None, 
                 continue
             dishes[k] = d
         if len(dishes) == len(SLOTS):
-            day = check_day(name, dishes, kcal, protein, avoid)
+            day = check_day(name, dishes, kcal, protein, avoid, why, protein_cap)
             days[s] = day
             problems += day.problems
     return Composed(not problems and len(days) == 2, tuple(problems), days)

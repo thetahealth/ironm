@@ -8,8 +8,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import time
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,13 +24,15 @@ from ironm_agent.roles import RoleSpec
 _log = logging.getLogger("ironm_agent.tools")
 _OUTCOME: ContextVar[str] = ContextVar("tool_outcome", default="ok")
 # 页面上的进度（§165）：每开始一步告诉页面在做什么；没列的用工具清单里的名字
+NOT_CITABLE = frozenset({"read_chat", "load_skill", "app_help", "recall_memory"})  # 不是查到的事实（§256）
+
 STEP_NAMES = {
     "search_knowledge": "查资料", "search_exercises": "查动作", "query_health_indicators": "看你的健康数据",
     "compute_metrics": "算指标", "plan_templates": "挑方案", "check_plan": "检查计划",
     "propose_new_plan": "排计划", "propose_plan_edit": "改计划", "propose_temporary_change": "排临时调整", "propose_diet_plan": "换饮食方案", "compose_diet_plan": "排饮食计划",
-    "log_workout": "记训练", "recall_memory": "翻你以前说的", "read_chat": "翻这次聊天", "estimate_strength": "估重量",
+    "log_workout": "记训练", "recall_memory": "翻你以前说的", "read_chat": "翻这次聊天", "last_sources": "查上一条的依据", "estimate_strength": "估重量",
     "find_substitutes": "找替代动作", "training_patterns": "看训练记录", "pain_check": "判断疼痛",
-    "nutrition_calc": "算营养", "chain_menu": "查连锁店菜单", "cardio_calc": "算有氧时长", "diet_templates": "查饮食方案", "trend_analysis": "看趋势", "explain_trends": "解读数据",
+    "nutrition_calc": "算营养", "chain_menu": "查连锁店菜单", "cardio_calc": "算有氧时长", "diet_templates": "查饮食方案", "trend_analysis": "看趋势", "lab_change": "算化验变化", "explain_trends": "解读数据",
     "app_help": "查 App 用法", "search_web": "联网查", "query_weather": "查天气", "load_skill": "翻做法", "timeline": "看时间线",
 }  # fmt: skip
 QUIET_STEPS = frozenset({"record_state", "remember"})  # 每轮顺手记的，不当一步给他看
@@ -181,7 +184,7 @@ KNOWLEDGE_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": KNOWLEDGE,
-        "description": "在本领域的依据库里查资料（指南、立场声明、系统综述等），返回带编号（如 K03）的条目。",
+        "description": "在依据库里查资料（指南、立场声明、系统综述等），返回带编号（如 K03）的条目。",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
@@ -212,12 +215,6 @@ class Evidence:
     def queries(self) -> int:
         return self.health_queries + self.knowledge_queries + self.metric_queries
 
-    def absorb(self, other: Evidence) -> None:
-        """接力时带上前一层的依据，后一层沿用同样的出处不会被当成编造。"""
-        self.support.update(other.support)
-        self.entries.update(other.entries)
-        self.calcs.update(other.calcs)
-        self.rows.update(other.rows)
 
 
 def row_numbers(row: Mapping[str, Any]) -> list[float]:
@@ -317,6 +314,9 @@ class Toolbox:
         self.user_info = {"user_id": user_id, "session_id": session_id}
         self.render = render
         self.evidence = Evidence()
+        # 这一轮每次工具调用：工具、步骤名、参数、结果原文（留给后面几轮，§254）
+        self.said: list[tuple[str, str, dict[str, Any], str]] = []
+        self.loaded: list[str] = []  # 这一轮装上的规程编号（先装的加上作答中自己装的，运行记录用，§255）
         self.progress: Progress | None = None  # 页面进度（§165）：每开始、做完一步告诉页面
         self._steps = 0
         if calcs:
@@ -379,12 +379,10 @@ class Toolbox:
         for e in entries:
             self.evidence.entries[e.id] = e
 
-    def prefetch(self, query: str, k: int = 3) -> str:
-        """作答前先按问题从本领域依据库取出最相关的几条（spec [2026-10-23] §7），不算一次查询；
-        能查动作库的角色，问题里点到名字的动作也一起取出来。"""
-        found = (
-            self.kb.search(query, self.spec.kb_domains, k=k) if self.spec.kb_domains and k else []
-        )
+    def prefetch(self, query: str) -> str:
+        """问题里点到名字的动作，作答前先从动作库取出来（不算一次查询）；依据库不再按字面预取（§255），
+        要资料时作答的模型自己查。"""
+        found = []
         if self.library:
             from ironm_agent.exercises import named_in
 
@@ -392,20 +390,6 @@ class Toolbox:
         for e in found:
             self.evidence.entries[e.id] = e
         return "\n\n".join(e.as_evidence() for e in found)
-
-    async def prefetch_health(self, names: Sequence[str]) -> tuple[str, int, bool]:
-        """问题里点到的指标，作答前由规则先查一遍最新值（spec [2026-10-23] §37），不占模型的查询次数。
-        返回（给模型看的查询结果、查到几行、查询成没成功）。"""
-        if self.health is None or not names:
-            return "", 0, False
-        before = len(self.evidence.support)
-        self._outcome = "ok"
-        start = time.perf_counter()
-        text = await self._health({"keywords": list(names), "view": "latest"})
-        self.evidence.health_queries -= 1  # 规则预取：不算模型自己的查询
-        ms = int((time.perf_counter() - start) * 1000)
-        self.evidence.calls.append({"tool": "prefetch_health", "result": self._outcome, "ms": ms})
-        return text, len(self.evidence.support) - before, self._outcome != "error"
 
     # 这一次工具调用的结果（run 里记下）：放在上下文变量里，几个查询同时跑时各记各的（§165）
     @property
@@ -415,6 +399,15 @@ class Toolbox:
     @_outcome.setter
     def _outcome(self, value: str) -> None:
         _OUTCOME.set(value)
+
+    def _citable(self, name: str, result: str) -> str:
+        """查到的数没有编号的（天气这类）登记成计算结果，回答里能引用，代码也认得出（§256）。
+        动作工具、翻聊天、装规程这类不登记；已经带编号的（资料、数据行、计算）不重复登记。"""
+        if (name in NOT_CITABLE or name in ACTION_TOOLS or not re.search(r"\d", result)
+                or re.search(r"\[(?:C|K|r)\d+\]|〔(?:C|K)\d+〕|\[r\d+", result)):  # fmt: skip
+            return result
+        cid = self.add_calc(f"{_step_name(name)}：{result[:6000]}")  # 模型看的是全文，核对也要看全（§267），只防异常
+        return f"{result}\n（以上可引用〔{cid}〕）"
 
     def add_calc(self, detail: str) -> str:
         """系统算出来的一段数（动作工具的结果）登记成计算结果，返回新的编号 C…（复核 11-05）。"""
@@ -443,7 +436,11 @@ class Toolbox:
         sid = (None if call.name in QUIET_STEPS
                else self.step(_step_name(call.name), str(call.arguments.get("query") or "")))  # fmt: skip
         try:
-            return await self._dispatch(call)
+            result = await self._dispatch(call)
+            if self._outcome != "refused":
+                result = self._citable(call.name, str(result))
+                self.said.append((call.name, _step_name(call.name), dict(call.arguments or {}), result))
+            return result
         except BaseException:  # 出错或被停下（到了时限）：这一步记成没做完
             self._outcome = "error"
             raise
@@ -474,7 +471,7 @@ class Toolbox:
         if self.context is not None and pro.allowed(self.spec.role.value, call.name):
             return await self._pro(call)
         self._outcome = "refused"
-        return json.dumps({"error": f"{self.spec.name}不能使用这个工具"}, ensure_ascii=False)
+        return json.dumps({"error": "这一轮不能使用这个工具"}, ensure_ascii=False)
 
     async def _pro(self, call: ToolCall) -> str:
         from ironm_agent.exercises import library_entries

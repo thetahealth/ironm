@@ -51,13 +51,12 @@ CATEGORIES: dict[Category, str] = {
     "level": "训练水平",
     "special": "特殊情况",  # 孕期、心脏病、糖尿病、高血压、近期手术（§148）
 }
-STATUSES: tuple[Status, ...] = ("active", "pending", "resolved", "superseded")
 ORIGINS: dict[Origin, str] = {
     "said": "你说的",
     "inferred": "系统推断",
     "advice": "给过的建议",
     "edited": "你改过的",
-    "data": "训练记录",
+    "data": "从记录看出来的",  # 训练、饮食记录按规则算的（§17、§261）
     "system": "系统",
 }
 

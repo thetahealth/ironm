@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 # 追问回复的开头：找“上一条回答”时跳过这些，往前找真正的回答
 REPLY_PREFIXES = ("上一条回答的依据", "还没有可以追溯的回答", "上一条回答没有用到")
@@ -39,3 +40,15 @@ def provenance_note(sources: str | None) -> str:
         "他在追问上一条回答的依据。下面是上一条回答用到的依据与来源（内部记录）：只讲他问的那一点，"
         "用资料名称、数据和算法说清楚，不带编号，不整段照念。\n" + sources
     )
+
+
+SOURCES_TOOL = "last_sources"
+SOURCES_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": SOURCES_TOOL,
+        "description": "他追问你上一条回答里的数、说法是从哪来的（这个数哪来的、依据是什么、怎么算的）时调用，"
+        "取上一条回答记下的依据与来源（资料、计算、他的数据）。",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {}},
+    },
+}

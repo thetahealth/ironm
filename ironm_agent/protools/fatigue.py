@@ -33,8 +33,6 @@ TIERS: tuple[tuple[int, Tier], ...] = ((40, "high"), (70, "mid"), (95, "low"))
 RATE_MIN, RATE_MAX, RATE_STEP = 0.7, 1.5, 1.1
 SORE_BUT_READY = 90  # 算出已恢复到这么多他却说还酸：在他身上恢复慢
 FINE_BUT_TIRED = 60  # 算出还不到这么多他说不酸了：在他身上恢复快
-# 训练水平（§69 建档后）作为起点
-LEVEL_RATE: dict[str, float] = {"none": 1.3, "beginner": 1.3, "some": 1.0, "experienced": 0.85}
 
 
 def effort(rpe: int | None) -> float:

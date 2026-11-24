@@ -32,7 +32,7 @@ MAX_DAYS = 3  # "常在周几练"最多列几天
 SKIP_SHARE = 0.5
 SCHEDULE_ASPECTS = frozenset({"days", "minutes", "frequency"})
 EVIDENCE_HEAD = "训练记录（{aspect}）："
-_ASPECT = re.compile(r"^训练记录（(\w+)）：")
+_ASPECT = re.compile(r"^(?:训练|饮食)记录（(\w+)）：")  # 饮食习惯同一套（§261）
 
 
 @dataclass(frozen=True)

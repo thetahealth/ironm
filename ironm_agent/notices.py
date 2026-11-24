@@ -22,8 +22,6 @@ from ironm_agent.ddl import run_ddl
 _log = logging.getLogger("ironm_agent.notices")
 
 RETAIN_DAYS = 180
-TABS = ("coach", "system")
-type Tab = Literal["coach", "system"]
 type Level = Literal["info", "warn"]
 
 

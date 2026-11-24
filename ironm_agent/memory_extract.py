@@ -36,9 +36,9 @@ _log = logging.getLogger("ironm_agent.memory_extract")
 MAX_OPS = 8  # 一轮最多落几条
 MAX_ADVICE = 1  # 一轮最多记几条"给过的建议"（只记最关键的那个决定）
 MAX_CONTENT = 60  # 一条记忆最多几个字
-ANSWER_CHARS = 600  # 给提取看的回答最多几个字
+ANSWER_CHARS = 6000  # 给提取看的回答的防异常上限（§267：回答末尾的回访承诺、关键建议要看得到）
 
-_PROMPT = """你负责替健身教练团队记住"这个用户本人"的情况，供以后回答时参考。根据这一轮对话，决定要新增、更新或标为已解决的记忆。
+_PROMPT = """你负责替健身管家 IronM 记住"这个用户本人"的情况，供以后回答时参考。根据这一轮对话，决定要新增、更新或标为已解决的记忆。
 
 类别（category 用英文代号）：
 - special 特殊情况：孕期、心脏病、糖尿病、高血压、近期做过手术（系统按这一类提醒运动风险）
@@ -167,7 +167,7 @@ class Extraction:
     state: dict[str, Any] = field(default_factory=dict)  # 他这一轮说的今天的状态（要了才有，§207）
 
 
-HELD_CHARS = 500  # 留着等补记的一句最多几个字
+HELD_CHARS = 2000  # 留着等补记的一句的防异常上限（§267）
 
 
 def held_line(text: str, day: date) -> str:

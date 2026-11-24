@@ -141,3 +141,22 @@ def item_json(item: Item) -> dict[str, Any]:
         "default": item.default(), "source": b.get("source", ""), "official_updated": b.get("official_updated", ""),
         "fetched": b.get("fetched", ""),
     }  # fmt: skip
+
+
+def branded(name: str, said: str) -> Any | None:
+    """这一餐说到了某家连锁店（餐名或任一样菜名里有品牌）时，不带品牌的菜名先按这家店的菜单认（§256）：
+    "小玉米杯"认成"麦当劳玉米杯（小）"，不再认成煮玉米。认不出返回 None。"""
+    from ironm_agent.foods import find
+
+    for code, info in menus()[0].items():
+        brand = str(info.get("name") or code)
+        if brand not in said:
+            continue
+        bare = name.removeprefix(brand)
+        short = bare.replace("中杯", "中").replace("小杯", "小").replace("大杯", "大")
+        # 先认菜单自己的叫法（"麦乐鸡"是正餐的 5 块），再加上品牌、份量说法、"可乐"的全称
+        for cand in dict.fromkeys((bare, f"{brand}{bare}", f"{brand}{short}", f"{brand}{short.replace('可乐', '可口可乐')}")):
+            food = find(cand)
+            if food is not None and food.cat == brand:
+                return food
+    return None

@@ -20,7 +20,6 @@ LIMITS = {FOOD: 50, MOVE: 50, PLAN: 20}
 FOOD_PREFIX = "my-"  # 我的食物的编号带这个前缀，和食物库的编号分开
 KCAL_OFF = 0.2  # 热量和三大营养素算出来的差两成以上：提示再看看包装
 type Mode = Literal["strength", "timed", "cardio"]  # 力量记重量×次数；计时记秒；有氧记时长
-MODES: tuple[Mode, ...] = ("strength", "timed", "cardio")
 
 
 class LimitError(ValueError):

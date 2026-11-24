@@ -378,9 +378,10 @@ LOG_MEAL_SCHEMA: dict[str, Any] = {
     "function": {
         "name": LOG_MEAL,
         "description": (
-            "他说了自己今天吃了什么时调用，记进今天的饮食记录（同一种餐今天只留一份；饮食页能改份量、删掉）。你只说哪一餐、有哪些食物、"
+            "他说了自己今天吃了什么时调用，记进今天的饮食记录（同一种餐可以记多次，都算进今天；别把同一顿重复记；饮食页能改份量、删掉）。你只说哪一餐、有哪些食物、"
             '各多少克（按他说的量估，"一碗米饭"约 150 克）、炒菜和外卖的油量；热量由系统按食物库算，不用你算。'
-            "库里可能没有的食物再给每 100 克的估值。结果会告诉你这一餐多少热量、今天还能吃多少。问吃什么、打算吃的、昨天以前吃的不记。"
+            "库里可能没有的食物再给每 100 克的估值。连锁店的菜写全品牌和菜名（如麦当劳双层吉士汉堡），按菜单的官方一份记，写几份（portions，不写算一份），不用写克数。吃的是最近推荐里的，写推荐编号（options）。记下后系统会在回答里写明记了什么、多少热量，你不用再说「记上了」。"
+            "结果会告诉你这一餐多少热量、今天还能吃多少。问吃什么、打算吃的、昨天以前吃的不记。"
         ),
         "parameters": {
             "type": "object",
@@ -411,8 +412,13 @@ LOG_MEAL_SCHEMA: dict[str, Any] = {
                         "required": ["name"],  # grams 和 portions 写一个（复核 11-05）
                     },
                 },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "他吃的是最近推荐里的哪几个，写编号（如 P3）；写了就按推荐时的内容和热量记，这几样不用再列进 foods（§259）",
+                },
             },
-            "required": ["kind", "foods"],
+            "required": ["kind"],  # foods 和 options 至少写一个
         },
     },
 }
@@ -877,3 +883,22 @@ class Desk:
             return answer
         self.unacted = True
         return strip_claims(answer, self.done_kinds | self._after())
+
+
+def drop_log_claims(text: str) -> str:
+    """去掉模型自己写的"记下了、记好了"那几小句（系统按实际结果另写一句，§259），同一句里别的话留着。"""
+    out = []
+    listing = False  # "记上了：……"在列记了什么：这一整句都去掉（系统那句写得更准）
+    for clause in re.findall(r"[^，,。！？；!?\n]*[，,。！？；!?\n]?", text):
+        if listing:
+            listing = clause[-1:] not in "。！？；!?\n"
+            continue
+        if clause and "log" in claimed(clause):
+            if re.search(r"[：:]", clause) and clause[-1:] not in "。！？；!?\n":
+                listing = True
+                continue
+            if clause[-1:] in "。！？；!?\n" and out:  # 去掉的是一句的最后一小句：句末标点给前一小句
+                out[-1] = out[-1].rstrip("，,") + clause[-1]
+            continue
+        out.append(clause)
+    return re.sub(r"^[，,。；\s]+", "", "".join(out)).strip()

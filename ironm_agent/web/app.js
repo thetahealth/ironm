@@ -375,10 +375,15 @@ async function homePage(view, sub) {
     view.append(h("a", { class: "link tl-back", href: "#home" }, icon("back", "xs"), "首页"), h("h2", { class: "page-h" }, "饮食账单"));
     return food(view);
   }
+  if (sub === "eat-plan") {  // 改计划（§251）
+    view.append(h("a", { class: "link tl-back", href: "#home/eat" }, icon("back", "xs"), "饮食账单"), h("h2", { class: "page-h" }, "饮食计划"));
+    return dietPlanPage(view);
+  }
   return home(view);
 }
 
-// 首页：日期和今天练什么、IronM 入口；今日热搜；提醒；今日委托（带今天天气，§197）；IronM 说；今天吃；睡眠心率；这周计划
+// 首页（§252，取代 §175、§197 的排法）：顶栏热搜；继续训练、填模型、器材、提醒、打卡状态（有才有）；今天练（人体图当主角）和
+// 今天的动作；今天吃、睡眠心率两格；这周每天一张卡；IronM 的待确认（一行）
 async function home(view) {
   const [brief, training, week, lib, gear, photos, mine, meals, m] = await Promise.all([
     api("/iron/api/brief").catch(() => null),
@@ -391,39 +396,145 @@ async function home(view) {
     api("/iron/api/meals").catch(() => null),
     metrics().then(byKey).catch(() => ({})),
     checkLive(),
+    profile().catch(() => null),  // 人体图按性别画
   ]);
   planSessions = training?.plan?.sessions || []; planTargets = training?.targets || {}; planWeights = training?.weights || {};
-  const today = week?.days?.find((d) => d.today);
-  const what = !training?.plan ? "还没有计划" : !today?.session ? "休息日" : (today.version || today.session).name;
-  const hot = await hotStrip();  // 排行榜唯一的入口（§161）
+  barHot();  // 排行榜唯一的入口（§161），§252 起在顶栏
   view.append(
-    h("div", { class: "home-top" },
-      h("span", { class: "day-line" }, h("i", { class: "dot" }), `${today?.weekday || todayLabel().split(" ")[1] || ""} · ${what}`),
-      h("a", { class: "buddy-pill", href: "#chat", "aria-label": "进 IronM 对话" }, mech(36),
-        h("span", { class: "bp-text" }, h("b", {}, "IronM"), h("small", {}, "点一下进 IronM", icon("chevron", "xs"))))),
-    hot || "",
     liveNow ? liveEntry({ today_plan: true }) : null,  // 继续时也补上今天计划（§123）
     modelCard(mine),
     gearCard(gear),
     alertsBox(brief),
     brief?.checkin ? h("section", { class: "card hc" }, checkinRow(brief.checkin)) : null,
     trainCard(brief, training, week, lib, photos?.images || {}),
-    coachCard(),
-    eatCard(meals, m),
-    vitalsRow(brief, m),
-    weekStrip(training, week));
+    h("div", { class: "home-duo" }, eatCard(meals, m), vitalsRow(brief, m)),
+    weekStrip(training, week, lib),
+    coachCard());
 }
 
-// 这周计划（§197）：周一到周日七格，今天高亮、练过打勾；点一天进计划页停在那天。没计划、读不到时不放
-function weekStrip(tr, week) {
+// 这周计划（§197）→ §252 取代七个字块：每天一张卡，练的日子有小人（亮那天练的肌肉）、训练名字、前两个动作；
+// 今天高亮、练完打勾；休息日窄一格。点哪天进计划页停在那天。没计划、读不到时不放
+function weekStrip(tr, week, lib = null) {
   if (!tr?.plan || !week?.days?.length) return null;
-  return h("section", { class: "card hc week-strip" },
-    hcHead("这周计划", h("a", { class: "link", href: "#plan" }, "完整计划", icon("chevron", "xs"))),
-    h("div", { class: "day-strip" }, week.days.map((c) => h("button", {
-      type: "button", class: `ds-day${c.session ? " plan" : ""}${c.today ? " on" : ""}${c.done ? " done" : ""}`,
-      "aria-label": `${c.weekday}${c.today ? "（今天）" : ""}：${c.session ? (c.version || c.session).name : "休息"}${c.done ? "，练过了" : ""}`,
-      onclick: () => { planDay = c.date; location.hash = "#plan"; },
-    }, h("i", {}, c.today ? "今" : c.weekday.slice(1)), h("b", {}, c.session ? (c.version || c.session).name.slice(0, 3) : "休")))));
+  const planned = week.days.filter((c) => c.session).length, done = week.days.filter((c) => c.session && c.done).length;
+  return h("section", { class: "card hw" },
+    h("div", { class: "hw-head" }, h("h2", {}, `这周 ${done}/${planned}`), h("a", { class: "link", href: "#plan" }, "周计划", icon("chevron", "xs"))),
+    h("div", { class: "hw-days" }, week.days.map((c) => {
+      const v = c.session ? c.version || c.session : null;
+      const go = () => { planDay = c.date; location.hash = "#plan"; };
+      const label = `${c.weekday}${c.today ? "（今天）" : ""}：${v ? v.name : "休息"}${c.done ? "，练过了" : ""}`;
+      if (!v) return h("button", { type: "button", class: `hw-day rest${c.today ? " on" : ""}`, "aria-label": label, onclick: go },
+        h("b", {}, c.today ? "今天" : c.weekday.slice(1)), icon("moon", "sm"), h("small", {}, "休息"));
+      const mu = todayMuscles(v.items, lib);
+      return h("button", { type: "button", class: `hw-day${c.today ? " on" : ""}${c.done ? " done" : ""}`, "aria-label": label, onclick: go },
+        h("span", { class: "hw-dl" }, h("b", {}, c.weekday), c.done ? h("span", { class: "hw-ok" }, icon("check", "xs")) : c.today ? h("span", {}, "今天") : null),
+        bodyFigs(mu.main, "hw-figs"),
+        h("b", { class: "hw-nm" }, v.name),
+        h("span", { class: "hw-mv" }, v.items.slice(0, 2).map((it) => h("span", {}, it.exercise))),
+        v.items.length > 2 ? h("small", {}, `等 ${v.items.length} 个动作`) : null);
+    })));
+}
+
+// 人体图（§252）：正面、背面，今天主要练到的肌肉亮珊瑚红；部位用大白话标在图旁边（大腿前侧、臀……）。
+// 图是一份共用的文件，读到了再画，读不到就不放
+const hitsOf = (lib, name) => (lib ?? cache.exercises)?.exercises?.find((x) => x.name === name)?.hits || { main: [], assist: [] };
+const PLAIN_GROUP = {
+  "group.chest": "胸", "group.shoulders": "肩", "group.traps": "斜方", "group.middle_back": "中背", "group.lats": "背",
+  "group.lower_back": "下背", "group.biceps": "上臂前侧", "group.triceps": "上臂后侧", "group.forearms": "前臂",
+  "group.abdominals": "腹", "group.glutes": "臀", "group.quadriceps": "大腿前侧", "group.hamstrings": "大腿后侧",
+  "group.adductors": "大腿内侧", "group.calves": "小腿", "group.hip_flexors": "髋前侧", "group.neck": "颈",
+};
+function todayMuscles(items, lib) {
+  const main = new Set(), groups = new Map();
+  for (const it of items || []) {
+    for (const x of hitsOf(lib, it.exercise).main) {
+      x.flat.forEach((f) => main.add(f));
+      const key = x.group || x.name;
+      const g = groups.get(key) || { word: PLAIN_GROUP[x.group] || x.name, sets: 0, flat: x.flat[0] };
+      g.sets += it.sets || 1;  // 练到的部位按组数排
+      groups.set(key, g);
+    }
+  }
+  return { main, groups: [...groups.values()].sort((a, b) => b.sets - a.sets) };
+}
+function bodyFigs(main, cls, drawn = null) {
+  const box = h("div", { class: cls, "aria-hidden": "true" });
+  loadFlat().then((data) => {
+    const figs = data.figures[cache.profile?.sex === "female" ? "female" : "male"] || data.figures.male;
+    box.replaceChildren(...["front", "back"].map((side) => {
+      const f = figs[side], [x, y, w, hgt] = f.viewBox;
+      const svg = s("svg", { viewBox: `${x} ${y} ${w} ${hgt}` });
+      for (const part of f.parts) {
+        const k = `${side}:${part.slug}`;
+        const g = s("g", { class: main.has(k) ? "bf-main" : part.slug === "hair" ? "bf-hair" : "bf-base", "data-k": k });
+        for (const d of part.d) g.append(s("path", { d }));
+        svg.append(g);
+      }
+      return svg;
+    }));
+    drawn?.(box);
+  }).catch(() => box.remove());
+  return box;
+}
+// 图旁边的部位标签：正面的标在左边，背面的标在右边；一条线从标签连到那一侧那块肌肉里面（两条腿是两块图，取靠标签那边的），
+// 末端一个点。线不交叉（负责人："肌肉连线不要直的也可以，不要相交"）：同一边的标签按肌肉的高低排、上下顺序和肌肉一样，
+// 挨得太近的往下错开；线先从标签平着走到同一条竖线上，再弯过去，两头都是平的。页面宽度变了重新算
+function placeLabels(stage, box, groups) {
+  let tries = 0, queued = false;
+  const place = () => {
+    queued = false;
+    if (!box.isConnected || !box.getBoundingClientRect().height) { if (tries++ < 120) requestAnimationFrame(place); return; }
+    stage.querySelectorAll(".hb-lab, .hb-lines").forEach((x) => x.remove());
+    const st = stage.getBoundingClientRect(), marks = [];
+    for (const g of groups.slice(0, 4)) {
+      const el = g.flat && box.querySelector(`[data-k="${g.flat}"]`);
+      const parts = el ? [...el.querySelectorAll("path")].map((p) => p.getBoundingClientRect()).filter((b) => b.width && b.height) : [];
+      if (!parts.length) continue;
+      const side = g.flat.startsWith("back:") ? "r" : "l";
+      const m = parts.reduce((a, b) => (side === "l" ? (b.left < a.left ? b : a) : (b.right > a.right ? b : a)));
+      const at = inside(el, m);
+      marks.push({ g, side, to: { x: at.x - st.left, y: at.y - st.top } });
+    }
+    if (!marks.length) return;
+    for (const side of ["l", "r"]) {  // 按肌肉的高低排，再往下错开：标签的上下顺序和肌肉一样，线就不会交叉
+      let last = -99;
+      for (const m of marks.filter((x) => x.side === side).sort((a, b) => a.to.y - b.to.y)) { m.y = Math.max(m.to.y, last + 30); last = m.y; }
+    }
+    for (const m of marks) { m.lab = h("span", { class: `hb-lab ${m.side}`, style: `top:${Math.round(m.y)}px` }, m.g.word); stage.append(m.lab); }
+    const edge = (m) => { const r = m.lab.getBoundingClientRect(); return m.side === "l" ? r.right - st.left : r.left - st.left; };
+    // 同一条竖线：在所有标签外边、所有肌肉里边（不越过最近的那块肌肉，线就不会折回去）
+    const ls = marks.filter((m) => m.side === "l"), rs = marks.filter((m) => m.side === "r");
+    const col = { l: Math.min(Math.max(...ls.map(edge), 0) + 6, ...ls.map((m) => m.to.x - 8)),
+      r: Math.max(Math.min(...rs.map(edge), st.width) - 6, ...rs.map((m) => m.to.x + 8)) };
+    const svg = s("svg", { class: "hb-lines", width: String(Math.round(st.width)), height: String(Math.round(st.height)), "aria-hidden": "true" });
+    for (const m of marks) {
+      // 直线折一下：先横到竖线，再一段直线斜到肌肉
+      const x0 = edge(m), xc = col[m.side], { x: tx, y: ty } = m.to, f = (n) => n.toFixed(1);
+      svg.append(s("path", { d: `M${f(x0)} ${f(m.y)}H${f(xc)}L${f(tx)} ${f(ty)}` }),
+        s("circle", { cx: f(tx), cy: f(ty), r: "3.5" }));
+    }
+    stage.append(svg);
+  };
+  place();
+  // 接上页面、量得出大小、宽度变了都会叫一次（不靠动画帧：页面在后台时动画帧不走）
+  if (window.ResizeObserver) new ResizeObserver(() => { if (!queued) { queued = true; queueMicrotask(place); } }).observe(stage);
+}
+
+// 那块肌肉里面的一个点：从外框中间往外找，第一个确实落在这块肌肉上的点（弯的肌肉外框中间可能在外面）
+function inside(el, r) {
+  const pts = [];
+  for (let i = 0; i <= 6; i++) for (let j = 0; j <= 6; j++) pts.push([r.left + (r.width * i) / 6, r.top + (r.height * j) / 6]);
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  pts.sort((p, q) => Math.hypot(p[0] - cx, (p[1] - cy) * 0.5) - Math.hypot(q[0] - cx, (q[1] - cy) * 0.5));
+  for (const [x, y] of pts) if (document.elementFromPoint(x, y)?.closest?.("[data-k]") === el) return { x, y };
+  return { x: cx, y: cy };
+}
+
+// 大字天气（§252）：温度大字，下面天气和城市；没设城市、读不到就不写
+function heroWeather(week) {
+  const wx = week?.days?.find((d) => d.today)?.weather;
+  if (!wx) return null;
+  return h("p", { class: `hb-wx${wx.level && wx.level !== "good" ? " warn" : ""}` }, h("b", { class: "num" }, `${wx.temp}°`), h("small", {}, `${wx.text}${wx.name ? ` · ${wx.name}` : ""}`));
 }
 
 // 今天的天气一行（§197，放在今日委托里）：没设城市、读不到就不写
@@ -576,19 +687,14 @@ const setsLine = (it, lib) => {
   if (partOf(lib, it.exercise) === "有氧" || /分钟/.test(it.reps)) return it.reps;
   return `${it.sets} 组 × ${it.reps}${/[\d–-]$/.test(it.reps) ? " 次" : ""}`;
 };
-// 这周已练几次：一行字加一条进度
-function weekBar(brief) {
-  const planned = brief?.week?.planned || brief?.week?.due || 0, done = brief?.week?.done || 0;
-  if (!planned) return null;
-  return h("div", { class: "week-bar", role: "img", "aria-label": `这周练了 ${done} 次，计划 ${planned} 次` },
-    h("span", {}, `这周已练 ${done}/${planned} 次`), h("i", {}, h("b", { style: `width:${Math.min(100, Math.round((done / planned) * 100))}%` })));
-}
-// 今日委托（§131 的说法，§175 照参照图的卡片）：标题、部位标签、本周进度、管家对今天的说法、编号的动作表、开始训练、练完直接打卡
+// 今日委托（§131 的说法）：§252 起要练的那天人体图当主角——大字"今天练 + 名字"、天气；人体图亮今天主要练到的肌肉（辅助的浅），
+// 写练到哪几块、几个动作、约几分钟、热身；开始训练、直接打卡；下面一排横滑的动作卡（图、序号、名字、组数、建议重量）。
+// 管家对今天的说法和调整照旧（§163）。没计划、休息日、生病先休息、练完了还是小卡片
 function trainCard(brief, tr, week, lib, photos = {}) {
   if (!tr || !week) return notLoaded("训练", "今天的训练安排");
   const t = brief?.today?.training, today = week.days?.find((d) => d.today);
   const card = (title, sub, ...more) => h("section", { class: "card quest" },
-    h("h2", { class: "quest-title" }, title), questWeather(week), sub ? h("p", { class: "quest-sub" }, sub) : null, weekBar(brief), ...more);
+    h("h2", { class: "quest-title" }, title), questWeather(week), sub ? h("p", { class: "quest-sub" }, sub) : null, ...more);
   if (!tr.plan) {
     return card("今日委托 · 还没有计划", "让 IronM 按你的目标排一份，或者从方案里挑一套。",
       h("button", { class: "btn block go", type: "button", onclick: () => askCoach("帮我排一个每周训练计划") }, "让 IronM 排一份"),
@@ -599,231 +705,82 @@ function trainCard(brief, tr, week, lib, photos = {}) {
   const v = today.version || today.session;
   // 练完那一句：和上次比最明显的进步，没得比就说练完了（§188）
   if (t?.done || today.done) return card(`今日委托 · ${v.name}`, doneLine(t?.progress, 0, false).replace(/^练完了，/, ""), h("span", { class: "tag green" }, icon("check", "xs"), "练完了"));
-  const parts = [...new Set(v.items.map((it) => partOf(lib, it.exercise)).filter(Boolean))].slice(0, 3);
   const coachNote = h("div", { class: "today-coach", role: "status", hidden: true });  // 管家对今天的说法（§163）
   const planned = Object.fromEntries(today.session.items.map((it) => [it.exercise, it.sets]));  // 被减掉的组（§121 需求 4）
-  const list = h("ol", { class: "quest-list" });
+  const rail = h("div", { class: "hb-rail" });
+  const figs = h("div", { class: "hb-figs-box" });
+  const meta = h("p", { class: "hb-meta" });
+  const stage = h("div", { class: "hb-stage", role: "img" }, figs, meta);
   let shownVersion = today.version || null;  // 直接打卡带上的版本：管家调整过就是调整后的
-  const drawList = (items) => list.replaceChildren(...items.map((it, i) => {
-    const cut = (planned[it.exercise] || 0) - (it.sets || 0);
-    return h("li", {}, h("span", { class: "q-no" }, String(i + 1)),
-      h("span", { class: "q-name" }, it.exercise, weightTag(it.exercise), it.load || cut > 0
-        ? h("small", { class: cut > 0 ? "move-cut" : "" }, [it.load, cut > 0 ? `比计划少 ${cut} 组` : ""].filter(Boolean).join("，")) : null),
-      h("span", { class: `q-sets${/自重|力竭/.test(`${it.load}${it.reps}`) ? " hot" : ""}` }, setsLine(it, lib)));
-  }));
+  const drawList = (items) => {
+    rail.replaceChildren(...items.map((it, i) => {
+      const cut = (planned[it.exercise] || 0) - (it.sets || 0);
+      const x = (lib ?? cache.exercises)?.exercises?.find((e) => e.name === it.exercise);
+      const pic = x?.images?.[0]?.url || x?.gif?.url;  // 卡片上用静止的图
+      return h("div", { class: "hb-move" },
+        h("span", { class: "hb-im" }, pic ? h("img", { src: pic, alt: "", loading: "lazy" }) : icon("dumbbell")),
+        h("span", { class: "hb-no num" }, String(i + 1)),
+        h("b", {}, it.exercise), h("small", { class: "num" }, partOf(lib, it.exercise) === "有氧" || /分钟/.test(it.reps) ? it.reps : `${it.sets} × ${it.reps}`), weightTag(it.exercise),
+        it.load || cut > 0 ? h("small", { class: cut > 0 ? "move-cut" : "" }, [it.load, cut > 0 ? `比计划少 ${cut} 组` : ""].filter(Boolean).join("，")) : null);
+    }));
+    const mu = todayMuscles(items, lib);
+    figs.replaceChildren(bodyFigs(mu.main, "hb-figs", (box) => placeLabels(stage, box, mu.groups)));
+    stage.setAttribute("aria-label", `今天练到：${mu.groups.slice(0, 4).map((g) => g.word).join("、") || v.name}`);
+    const mins = today.session.minutes;
+    meta.replaceChildren(h("span", {}, h("b", { class: "num" }, String(items.length)), " 个动作"),
+      mins ? h("span", {}, "约 ", h("b", { class: "num" }, String(mins)), " 分钟") : null,
+      today.warmup ? h("span", {}, "热身 ", h("b", { class: "num" }, String(today.warmup.minutes)), " 分钟") : null);
+  };
   drawList(v.items);
   // 管家定的今天（§163）：调整过就把动作表换成调整后的，和上面那一行说法一致
   const onToday = (tv, ctl) => {
     heroCoach(coachNote, tv, ctl);
     if (tv.status === "ok" && tv.changed && tv.today) { drawList(tv.today.items); shownVersion = tv.today; }
   };
-  const detail = h("div", { class: "hc-detail", hidden: true },
-    todayVersion(today.session, { compact: true, onStatus: onToday }),
-    h("a", { class: "link hc-more", href: "#plan" }, "完整计划", icon("chevron", "xs")));
-  const toggle = h("button", { class: "link hc-toggle", type: "button", "aria-expanded": "false" }, "更多");
-  toggle.addEventListener("click", () => {
-    detail.hidden = !detail.hidden;
-    toggle.textContent = detail.hidden ? "更多" : "收起";
-    toggle.setAttribute("aria-expanded", String(!detail.hidden));
-  });
-  return h("section", { class: "card quest" },
-    h("div", { class: "quest-top" },
-      h("h2", { class: "quest-title" }, `今日委托 · ${v.name}`),
-      h("div", { class: "quest-tags" },
-        parts.length ? h("span", { class: "tag coral" }, parts.join(" · ")) : null,
-        h("span", { class: "tag green" }, "完成 +1 颗星"))),
-    questWeather(week),
-    weekBar(brief),
+  const detail = h("div", { class: "hc-detail", hidden: true }, todayVersion(today.session, { compact: true, onStatus: onToday }));
+  return h("section", { class: "hb" },
+    h("div", { class: "hb-head" },
+      h("div", {}, h("small", {}, `${today.weekday} · 今日委托`), h("h2", { class: "hb-title" }, "今天练", h("em", {}, v.name))),
+      heroWeather(week)),
     coachNote,
-    list,
-    h("button", { class: "btn block go", type: "button", onclick: () => startLive({ today_plan: true }) }, icon("play", "sm"), liveNow ? "继续训练" : "开始训练"),
-    h("button", { class: "btn ghost block", type: "button", onclick: () => doneSheet(v.name, shownVersion) }, "已经练完了，直接打卡"),
-    h("div", { class: "quest-foot" }, today.warmup ? h("span", { class: "muted" }, `先热身约 ${today.warmup.minutes} 分钟`) : h("span"), toggle),
-    detail);
+    stage,
+    h("button", { class: "btn block go hb-go", type: "button", onclick: () => startLive({ today_plan: true }) }, icon("play", "sm"), liveNow ? "继续训练" : "开始训练"),
+    h("div", { class: "hb-sub" },
+      h("span", {}, "练完了？", h("button", { class: "link", type: "button", onclick: () => doneSheet(v.name, shownVersion) }, "直接打卡")),
+      h("span", {}, "完成 +1 颗星")),
+    h("div", { class: "hb-sec" }, h("h2", {}, "今天的动作"), h("a", { class: "link", href: "#plan" }, "完整计划", icon("chevron", "xs"))),
+    rail, detail);
 }
 
-// 今天吃（§202 先排后确认）：标题一行"N kcal 还能吃"；四顿各一行——记过的打勾（点开看、改克数），今天计划里有、
-// 没记的淡色空圈（点圈照计划记，点名字记实际吃的），没排的只写餐名；最下面一个框：打字、拍照、说话，发出去先出克数再记
+// 今天吃（§202 先排后确认）→ §252 取代四行字；"吃了什么"那一行还在首页，见 home）：一格，还能吃多少的环和数，
+// 四顿各一个小圆照片（吃了的是照片，计划里还没吃的是虚线），点了进饮食账单；没目标时引导去填资料
 function eatCard(d, m) {
-  if (!d) {  // 没读到也留着"饮食账单"入口
-    return h("section", { class: "card eat" }, h("div", { class: "eat-head" }, h("h2", {}, "今天吃"),
-      h("a", { class: "link eat-more", href: "#home/eat" }, "饮食账单", icon("chevron", "xs"))),
-      h("p", { class: "muted" }, "今天的饮食这次没读到，点「饮食账单」再看。"));
-  }
+  if (!d) return h("a", { class: "he", href: "#home/eat" }, h("span", { class: "he-k" }, "今天吃", icon("chevron", "xs")), h("p", { class: "muted" }, "这次没读到，点开再看。"));
   const t = d.target, tot = d.totals;
   const left = t ? Math.round(t.kcal - tot.kcal) : null;
-  const st = { kind: null, photo: null };
-  const rows = h("div", { class: "er-list" });
-  const box = eatComposer(d, st);
-  const pick = (k) => { st.kind = k; box.focus(k); };
-  const drawRows = (plan) => {
+  const R = 26, C = 2 * Math.PI * R, pct = t ? Math.min(1, tot.kcal / t.kcal) : 0;
+  const ring = s("svg", { viewBox: "0 0 64 64", class: "he-ring" });
+  ring.append(s("circle", { cx: "32", cy: "32", r: String(R), class: "he-track" }),
+    s("circle", { cx: "32", cy: "32", r: String(R), class: "he-done", "stroke-dasharray": `${(pct * C).toFixed(1)} ${C.toFixed(1)}`, transform: "rotate(-90 32 32)" }));
+  const plates = h("div", { class: "he-plates" });
+  const drawPlates = (plan) => {
     const set = plan?.sets?.[plan.today_set] || {};
-    const kinds = MEAL_KINDS.filter((k) => MAIN_KINDS.includes(k) || d.meals.some((x) => x.kind === k));
-    rows.replaceChildren(...kinds.map((k) => {
-      const xs = d.meals.filter((x) => x.kind === k);
-      if (xs.length) {
-        return pressable(h("div", { class: "er done", "aria-label": `${k}，点开看` },
-          h("span", { class: "er-dot on" }, icon("check", "xs")), h("span", { class: "er-name" }, `${k} · ${xs.map((x) => x.name).join("、")}`),
-          h("span", { class: "er-kcal num" }, `${Math.round(xs.reduce((a, x) => a + x.macros.kcal, 0))} kcal`)), () => mealSheet(xs[0], () => render()));
-      }
-      const p = set[k] && !set[k].missing ? set[k] : null;
-      if (p) {
-        return h("div", { class: "er planned" },
-          h("button", { class: "er-dot", type: "button", "aria-label": `${k}照计划吃了：${p.name}`, onclick: async (e) => {
-            e.currentTarget.disabled = true;
-            try { await api("/iron/api/diet/plan/log", { method: "POST", body: JSON.stringify({ slot: k }) }); flash(`记下了${k}`); render(); }
-            catch (err) { flash(err.message); e.currentTarget.disabled = false; }
-          } }),
-          h("button", { class: "er-name", type: "button", "aria-label": `${k}吃的不一样，记实际吃的`, onclick: () => pick(k) }, `${k} · ${p.name}`),
-          h("span", { class: "er-kcal num" }, `${Math.round(p.kcal)} kcal`));
-      }
-      return h("div", { class: "er none" }, h("span", { class: "er-dot ghost" }),
-        h("button", { class: "er-name", type: "button", "aria-label": `记${k}`, onclick: () => pick(k) }, k), h("span"));
+    plates.replaceChildren(...MAIN_KINDS.map((k) => {
+      const x = d.meals.find((y) => y.kind === k), p = set[k] && !set[k].missing ? set[k] : null;
+      const el = h("i", { class: x ? "on" : p ? "todo" : "none", title: `${k}${x ? `：${x.name}` : p ? `：计划 ${p.name}` : "：还没记"}` });
+      if (x?.has_photo) authedImg(`/iron/api/meals/${x.id}/photo`, el, "");
+      else if ((x || p)?.image?.url) el.append(h("img", { src: (x || p).image.url, alt: "", loading: "lazy" }));
+      else if (x) el.append(foodTile(x.name, null));
+      return el;
     }));
   };
-  drawRows(null);
-  api("/iron/api/diet/plan").then(drawRows).catch(() => {});
-  return h("section", { class: "card eat eat2" },
-    h("div", { class: "eat-head" }, h("a", { class: "eat-title", href: "#home/eat", "aria-label": "今天吃，进饮食账单" }, h("h2", {}, "今天吃"), icon("chevron", "xs")),
-      left == null ? h("a", { class: "link eat-left", href: "#me" }, "填好资料算目标")
-        : h("span", { class: "eat-left" }, h("b", { class: "num" }, String(Math.abs(left))), left >= 0 ? " kcal 还能吃" : " kcal 多了")),
-    rows, box.el);
-}
-
-// 记录框（§202）：打字；相机拍或选一张（小图贴在左边，能去掉）；话筒（§199，没装语音模型时不显示）。
-// 有内容时出发送；发出去先估出这一餐有哪几样、各多少克（不存），弹出清单调好再记
-function eatComposer(d, st) {
-  const input = h("input", { type: "text", maxlength: "120", placeholder: "吃了什么", "aria-label": "吃了什么", enterkeyhint: "send" });
-  const file = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "sr-only" });
-  const thumb = h("span", { class: "ec-thumb", hidden: true });
-  const cam = h("label", { class: "ec-btn", "aria-label": "拍照" }, file, icon("camera", "sm"));
-  const go = h("button", { class: "ec-btn go", type: "button", "aria-label": "发送", hidden: true }, icon("arrowUp", "sm"));
-  const msg = h("div", { class: "ec-msg", role: "status" });
-  const refresh = () => {
-    const has = !!(input.value.trim() || st.photo);
-    go.hidden = !has;
-    if (voice.ok) mic.hidden = has && !mic.classList.contains("rec");
-  };
-  const { mic, bar } = voiceInput(input, refresh);
-  mic.classList.add("ec-btn");
-  const clear = () => { input.value = ""; st.photo = null; thumb.hidden = true; thumb.replaceChildren(); refresh(); };
-  let shrinking = null;  // 照片还在压缩时点了发送：等它压完再发
-  file.addEventListener("change", async () => {
-    const f = file.files[0]; file.value = "";
-    if (!f) return;
-    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { msg.replaceChildren(errLine(new Error("照片只支持 JPG、PNG、WebP"))); return; }
-    shrinking = shrinkPhoto(f);
-    const photo = await shrinking;
-    shrinking = null;
-    if (photo.size > 5 * MB) { msg.replaceChildren(errLine(new Error("照片太大了，换一张试试"))); return; }
-    st.photo = photo; msg.replaceChildren();
-    thumb.replaceChildren(h("img", { src: URL.createObjectURL(photo), alt: "这一餐的照片" }),
-      h("button", { type: "button", "aria-label": "去掉照片", onclick: () => { st.photo = null; thumb.hidden = true; thumb.replaceChildren(); refresh(); } }, icon("x", "xs")));
-    thumb.hidden = false; refresh();
-  });
-  const submit = async () => {
-    if (shrinking) await shrinking.catch(() => null);
-    const said = input.value.trim();
-    if (!said && !st.photo) return;
-    const kind = st.kind || mealKindNow();
-    const form = new FormData();
-    form.append("said", said); form.append("kind", kind);
-    if (st.photo) form.append("photo", st.photo, "meal.jpg");
-    go.disabled = true; input.disabled = true;
-    msg.replaceChildren(h("span", { class: "typing" }, h("i"), h("i"), h("i")), h("span", { class: "muted" }, " IronM 在认…"));
-    try {
-      const r = await send("/iron/api/meals/estimate", form);
-      msg.replaceChildren();
-      mealReview(r.meal, { photo: st.photo, said, kind, day: d, done: clear });
-    } catch (err) { msg.replaceChildren(errLine(err)); }
-    finally { go.disabled = false; input.disabled = false; }
-  };
-  input.addEventListener("input", refresh);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(); } });
-  go.addEventListener("click", submit);
-  return {
-    el: h("div", { class: "ec-wrap" }, bar, h("div", { class: "ec" }, thumb, input, cam, mic, go), msg),
-    focus(k) { input.placeholder = `${k}吃了什么`; input.focus(); },
-  };
-}
-
-// 先出克数（§202）：照片小图和那句话；每样"名字 − 克数 + kcal"，一次 10 g、点克数直接填、能删；加一样；哪一餐和合计；记下才存
-function mealReview(est, ctx) {
-  const lines = (est.foods || []).map((f) => ({ name: f.name, grams: Math.round(f.grams), oil: f.oil || "正常", food_id: f.food_id || null,
-    est100: f.est100 || null, k100: f.grams ? (f.macros.kcal / f.grams) * 100 : 0 }));
-  const whole = lines.length ? null : est.macros;  // 模型没给逐样食物：只有整餐估值
-  let kind = ctx.kind;
-  const when = timePick();  // 几点（§247）
-  const list = h("div", { class: "mr-list" });
-  const total = h("b", { class: "num" });
-  const sum = () => {
-    const k = whole ? whole.kcal : lines.reduce((a, x) => a + (x.k100 * x.grams) / 100, 0);
-    total.textContent = `${Math.round(k)} kcal`;
-  };
-  const draw = () => {
-    if (whole) {
-      list.replaceChildren(h("div", { class: "mr-row" }, h("span", { class: "mr-name" }, est.name), h("span"), h("span", { class: "mr-kcal num" }, `${Math.round(whole.kcal)} kcal`)));
-      sum(); return;
-    }
-    list.replaceChildren(...lines.map((x, i) => {
-      const kc = h("span", { class: "mr-kcal num" });
-      const show = () => { kc.textContent = `${Math.round((x.k100 * x.grams) / 100)} kcal`; sum(); };
-      const g = scrub(h("input", { type: "number", inputmode: "numeric", min: "1", max: "3000", step: "1", value: String(x.grams), "aria-label": `${x.name}多少克`, class: "mr-g" }), { step: 5 });
-      const setG = (v) => { x.grams = Math.min(3000, Math.max(1, Math.round(v) || 1)); g.value = String(x.grams); show(); };
-      g.addEventListener("input", () => { const v = Number(g.value); if (v > 0) { x.grams = Math.min(3000, Math.round(v)); show(); } });
-      g.addEventListener("change", () => setG(Number(g.value)));
-      show();
-      return h("div", { class: "mr-row" },
-        h("span", { class: "mr-name" }, x.name),
-        h("span", { class: "mr-step" },
-          h("button", { class: "mr-b", type: "button", "aria-label": `${x.name}少 10 克`, onclick: () => setG(x.grams - 10) }, "−"),
-          h("label", { class: "mr-gbox" }, g, h("small", {}, "g")),
-          h("button", { class: "mr-b", type: "button", "aria-label": `${x.name}多 10 克`, onclick: () => setG(x.grams + 10) }, "+")),
-        kc,
-        h("button", { class: "icon-btn mr-del", type: "button", "aria-label": `删掉${x.name}`, onclick: () => { lines.splice(i, 1); draw(); } }, icon("close", "xs")));
-    }), adder);
-    sum();
-  };
-  // 加一样：在食物库和我的食物里搜
-  const q = h("input", { type: "search", placeholder: "加一样：搜米饭、鸡蛋…", "aria-label": "加一样" });
-  const hits = h("div", { class: "fl-hits" });
-  let timer = 0;
-  q.addEventListener("input", () => {
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      const s = q.value.trim();
-      if (!s) { hits.replaceChildren(); return; }
-      const r = await api(`/iron/api/foods?q=${encodeURIComponent(s)}`).catch(() => ({ foods: [] }));
-      hits.replaceChildren(...(r.foods.length ? r.foods.slice(0, 6).map((f) => h("button", { class: "fl-hit", type: "button", onclick: () => {
-        lines.push({ name: f.name, grams: Math.round(f.unit_g), oil: "正常", food_id: f.id, est100: null, k100: f.per100.kcal });
-        q.value = ""; hits.replaceChildren(); draw();
-      } }, h("span", { class: "fh-text" }, h("span", {}, f.name, f.mine ? h("em", { class: "mine-tag" }, "我的") : null), h("small", { class: "muted num" }, `${f.per100.kcal} kcal / 100 g`))))
-        : [h("p", { class: "caption" }, "库里没找到，换个叫法试试")]));
-    }, 200);
-  });
-  const adder = h("div", { class: "mr-add" }, h("span", { class: "mr-add-ic" }, icon("plus", "xs")), q);
-  const msg = h("div", { role: "status" });
-  const save = h("button", { class: "btn block", type: "button", onclick: async () => {
-    if (!whole && !lines.length) { msg.replaceChildren(errLine(new Error("至少留一样"))); return; }
-    const at = when.read();
-    if (!at) { msg.replaceChildren(errLine(new Error("只能选今天、不晚于现在的时间"))); return; }
-    const meal = { name: est.name, confidence: est.confidence || "", note: est.note || "",
-      foods: lines.map((x) => ({ name: x.name, grams: x.grams, oil: x.oil, food_id: x.food_id, est100: x.est100 })), macros: whole };
-    const form = new FormData();
-    form.append("meal", JSON.stringify(meal)); form.append("kind", kind); form.append("said", ctx.said || ""); form.append("at", at);
-    if (ctx.photo) form.append("photo", ctx.photo, "meal.jpg");
-    save.disabled = true;
-    try { await send("/iron/api/meals/confirm", form); closeSheet(); ctx.done(); flash(`记下了${kind}`); render(); }
-    catch (err) { msg.replaceChildren(errLine(err)); save.disabled = false; }
-  } }, "记下");
-  draw();
-  openSheet("这一餐",
-    ctx.photo || ctx.said ? h("div", { class: "mr-top" }, ctx.photo ? h("img", { class: "mr-photo", src: URL.createObjectURL(ctx.photo), alt: "这一餐的照片" }) : null,
-      ctx.said ? h("span", { class: "mr-said" }, ctx.said) : null) : null,
-    list, hits,
-    h("div", { class: "mr-total" }, h("span", { class: "muted" }, "合计"), total),
-    pills(MEAL_KINDS, kind, (v) => { kind = v; sum(); }), when.el,
-    save, msg);
+  drawPlates(null);
+  api("/iron/api/diet/plan").then(drawPlates).catch(() => {});
+  return h("a", { class: "he", href: "#home/eat", "aria-label": "今天吃，进饮食账单" },
+    h("span", { class: "he-k" }, "今天吃", icon("chevron", "xs")),
+    t ? h("div", { class: "he-row" }, ring, h("div", { class: "he-num" }, h("b", { class: "num" }, String(Math.abs(left))), h("small", {}, left >= 0 ? "千卡还能吃" : "千卡多吃了")))
+      : h("p", { class: "he-fill" }, "填好资料算目标"),
+    plates);
 }
 
 // 首页大卡片上管家对今天的说法（§163）：正在看、出错了（能重试）、调整过、定了休息；按原计划的不多说。
@@ -870,9 +827,12 @@ function vitalsRow(brief, m) {
     const now = month[month.length - 1][1], last = had[had.length - 1];
     const sub = now != null ? `近 7 天平均 ${vitalNum(key, vitalStats(month.slice(-7)).avg)}`
       : last ? `最近 ${md(last[0])} ${vitalNum(key, last[1])}` : "点这里记一条";
+    const week7 = month.slice(-7), vals = week7.map((p) => p[1]).filter((v) => v != null);  // 近 7 天小柱（§252）：按这 7 天的高低拉开
+    const lo = Math.min(...vals), hi = Math.max(...vals), barH = (v) => (v == null ? 8 : hi > lo ? Math.round(30 + ((v - lo) / (hi - lo)) * 70) : 60);
     return pressable(h("div", { class: `vt ${cls}`, "aria-label": `${name}，点开看近一周、近一个月` },
-      h("span", { class: "vt-k" }, `${name} · 今天`),
+      h("span", { class: "vt-k" }, name),
       h("b", { class: "num" }, vitalNum(key, now), now != null ? h("small", {}, ` ${x.unit}`) : null),
+      h("span", { class: "vt-bars", "aria-hidden": "true" }, week7.map((p, i) => h("i", { class: i === 6 ? "now" : p[1] == null ? "none" : "", style: `height:${barH(p[1])}%` }))),
       h("span", { class: "vt-sub" }, sub)), () => vitalSheet(x, today));
   }).filter(Boolean);
   return cells.length ? h("div", { class: "vitals", style: `--n:${cells.length}` }, cells) : null;
@@ -921,16 +881,16 @@ const coachDecide = (key, decision, row, done) => async () => {
   }
 };
 // 一条要他确认的调整：标题、预览（有的话）、"好""暂不"。首页卡片和消息页用同一个（§235）
-function pendingRow(x) {
+function pendingRow(x, extra = null) {
   const decide = coachDecide;
   const row = h("div", { class: "hc-msg" });
   const id = x.value?.draft;
   // 拒绝修改（§237）：每日复查提的走撤销（同一件事 14 天内不再提，§182），别的走暂不
-  const later = h("button", { class: "btn quiet small", type: "button", onclick: decide(x.key, x.key.startsWith("review:") ? "undo" : "later", row, "好的，这条不改了。") }, "拒绝修改");
-  const yes = h("button", { class: "btn small", type: "button", disabled: !!id }, "确认修改");
+  const later = h("button", { class: "btn quiet small", type: "button", onclick: decide(x.key, x.key.startsWith("review:") ? "undo" : "later", row, "好的，这条不改了。") }, "先不改");
+  const yes = h("button", { class: "btn small", type: "button", disabled: !!id }, "好");
   const detail = h("div", { class: "hc-draft" });
   const btns = h("div", { class: "btn-row" }, yes, later);
-  row.append(h("p", {}, x.title), x.why ? h("p", { class: "muted hc-why" }, `理由：${x.why}`) : null, detail, btns);
+  row.append(h("p", {}, x.title), x.why ? h("p", { class: "muted hc-why" }, `理由：${x.why}`) : null, extra, detail, btns);
   if (id) {  // IronM 提的改计划、临时调整已经存成预览（§163）：列出改了什么，点"好"就确认这份预览，和对话里的卡片一样
     api(`/iron/api/drafts/${encodeURIComponent(id)}`).then(({ draft }) => {
       if (draft.state === "pending" && !draft.expired) {
@@ -957,14 +917,29 @@ function pendingRow(x) {
 }
 // 首页"IronM 说"（§104 需求 3、§121 需求 4；§235 起只留要他点的，刚做的自动调整到消息里看）
 function coachCard() {
-  const box = h("section", { class: "buddy-say", hidden: true });
+  const box = h("section", { class: "hm-say", hidden: true });
   api("/iron/api/coach/inbox").then((r) => {
     if (!r.pending.length) return;
-    box.replaceChildren(h("span", { class: "buddy-say-head" }, mech(20), "IronM 说"), ...r.pending.map(pendingRow),
-      h("a", { class: "link buddy-all", href: "#messages" }, "全部消息", icon("chevron", "xs")));
+    box.replaceChildren(sayRow(r.pending[0], r.pending.length));
     box.hidden = false;
   }).catch(() => {});
   return box;
+}
+// 首页一行（§252）：头像、要他确认的那件事和理由、"好"；点这一行进消息页看全部（能不改、看改了什么）
+function sayRow(x, n) {
+  const row = h("div", { class: "hm-row" });
+  const yes = h("button", { class: "btn small hm-yes", type: "button" }, "好");
+  const id = x.value?.draft;
+  row.append(mech(34), h("a", { class: "hm-text", href: "#messages", "aria-label": `${x.title}，点开看全部消息` },
+    h("b", {}, x.title), x.why ? h("small", {}, x.why) : null, n > 1 ? h("small", {}, `还有 ${n - 1} 条`) : null), yes);
+  if (id) {  // IronM 提的改计划、临时调整是预览：读到了还在等确认才能点"好"（§163）
+    yes.disabled = true;
+    api(`/iron/api/drafts/${encodeURIComponent(id)}`).then(({ draft }) => {
+      if (draft.state === "pending" && !draft.expired) { yes.disabled = false; yes.addEventListener("click", () => confirmPending(x, draft, row)); }
+      else yes.remove();
+    }).catch(() => yes.remove());
+  } else yes.addEventListener("click", () => acceptPending(x, row));
+  return row;
 }
 
 // 首页点"好"确认一份预览（§163）：先确认预览（真正生效），再把这条待确认收起；刷新首页，撤销放在提示里
@@ -1164,21 +1139,28 @@ async function rankPage(view, sub, rest) {
 }
 
 // 首页最上面：今日热搜（§161）。露出前 3 条，整条点了进排行榜；没人搜、没人评时照实写
-async function hotStrip() {
+// 顶栏热搜（§252，取代 §161 首页上的热搜一行）：只在首页，"首页"旁边一条，几秒换下一条（前三条），点了进排行榜
+let hotTick = null;
+async function barHot() {
+  const el = $("bar-hot");
   let d = null;
-  try { d = cache.rank || (cache.rank = await api("/iron/api/rank")); } catch { return null; }
+  try { d = cache.rank || (cache.rank = await api("/iron/api/rank")); } catch { return; }
   setTimeout(() => { cache.rank = null; }, 60_000);
-  let rows = (d.hot || []).slice(0, 3).map((x) => ({ name: x.term, flag: x.flag }));
+  let rows = (d.hot || []).slice(0, 3).map((x) => x.term);
   if (!rows.length) {
-    rows = d.boards.flatMap((b) => b.top.map((x) => ({ name: x.name, people: x.votes || 0, flag: x.trend === "↑" ? "升" : "" })))
-      .sort((a, b) => b.people - a.people).slice(0, 3);
+    rows = (d.boards || []).flatMap((b) => b.top.map((x) => ({ name: x.name, people: x.votes || 0 })))
+      .sort((a, b) => b.people - a.people).slice(0, 3).map((x) => x.name);
   }
-  return h("a", { class: "hot-strip", href: "#rank", "aria-label": "今日热搜，点开看排行榜" },
-    h("span", { class: "hot-label" }, "今日热搜"),
-    rows.length ? h("span", { class: "hot-rows" }, rows.map((x, i) => h("span", { class: "hot-row" }, h("b", {}, String(i + 1)), x.name,
-      x.flag ? h("em", { class: `rk-flag f-${{ 热: "hot", 新: "new", 升: "up" }[x.flag]}` }, x.flag) : null)))
-      : h("span", { class: "hot-rows muted" }, "看看大家都在练什么、吃什么"),
-    icon("chevron", "sm"));
+  if (!rows.length || !el || (location.hash || "#home") !== "#home") return;
+  let i = 0;
+  const show = () => {
+    el.replaceChildren(h("span", { class: "bh-fl" }, icon("flame", "xs")), h("b", { class: "num" }, String(i + 1)), h("span", { class: "bh-w" }, rows[i]));
+    el.setAttribute("aria-label", `今日热搜第 ${i + 1}：${rows[i]}，点开看排行榜`);
+  };
+  show();
+  el.hidden = false;
+  clearInterval(hotTick);
+  if (rows.length > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) hotTick = setInterval(() => { i = (i + 1) % rows.length; show(); }, 4000);
 }
 
 // 认器械（§149）：拍一张（识别器还没有模型时如实说，引导从清单里选）；下面按三组列常见器械，点开看怎么调、能练什么
@@ -2573,21 +2555,58 @@ async function shrinkPhoto(file) {
   } catch { return file; }
 }
 
-// 首页·干饭（§125）：只留今日余额、记一餐、今天的饮食计划三块
+// 饮食账单（§251，取代 §125、§248 的布局）：余额 → 今天吃的（右边拍照、记一顿、改计划三个按钮；下面常吃的一排）→ 一条时间线；
+// 记一顿从底下拉出（§248 的那张表），改计划是一页（#home/eat-plan）
 async function food(view) {
   const [day, m] = await Promise.all([api("/iron/api/meals"), metrics().then(byKey).catch(() => ({}))]);
-  const budget = h("div");
-  const plan = h("div");
-  const meta = h("p", { class: "caption tp-meta" });
-  let today = day;
-  const redraw = (d) => { today = d; budget.replaceChildren(todayBudget(d, m)); plan.replaceChildren(todayPlan(d, redraw, meta, form)); };
-  const form = mealForm(() => today, (d) => redraw(d));  // 记一顿（§248）：一张表，取代拍照记 / 写一句 / 从图鉴选
+  let today = day, plan = null;
+  const budget = h("div"), line = h("div");
+  const record = (opts = {}) => openMealForm(redraw, opts);
+  function redraw(d) {
+    if (d) today = d;
+    budget.replaceChildren(todayBudget(today, m, plan));
+    line.replaceChildren(todayPlan(today, redraw, plan, record));
+  }
   redraw(day);
-  const editPlan = h("button", { class: "link", type: "button", onclick: async () => {
-    const p = await api("/iron/api/diet/plan").catch(() => null);
-    if (p) planEditSheet(p, () => redraw(today)); else flash("饮食计划这次没读到");
-  } }, icon("edit", "xs"), "改计划");
-  view.append(budget, form.el, section("今天吃的", editPlan, plan));
+  api("/iron/api/diet/plan").then((p) => { plan = p; redraw(); }).catch(() => {});
+  const usual = h("div", { class: "dz-usual", hidden: true });
+  api("/iron/api/meals/usual").then((r) => {  // 常吃的：点一下按现在这一餐记下
+    if (!r.usual?.length) return;
+    usual.hidden = false;
+    usual.replaceChildren(h("span", { class: "dz-usual-lab" }, "常吃的"), ...r.usual.slice(0, 8).map((u) => h("button", { class: "dz-usual-chip", type: "button",
+      onclick: async () => { const k = mealKindNow(); try { redraw(await api("/iron/api/meals/usual", { method: "POST", body: JSON.stringify({ id: u.id, kind: k }) })); flash(`记下了：${k} · ${u.name}`); } catch (err) { flash(err.message); } } },
+      foodTile(u.name, u.image, "", "sm"), h("span", {}, u.name), h("small", { class: "num" }, String(Math.round(u.kcal))))));
+  }).catch(() => {});
+  // "今天吃的"一行右边三个按钮（§251 补：负责人要记一顿、拍照放到计划旁边，改计划也是按钮）：拍照、记一顿、改计划
+  const acts = h("div", { class: "dz-acts-top" },
+    h("button", { class: "dz-cam", type: "button", "aria-label": "拍一张记一顿", title: "拍一张记一顿", onclick: () => record({ camera: true }) }, icon("camera", "sm")),
+    h("button", { class: "btn small dz-rec", type: "button", onclick: () => record() }, icon("plus", "xs"), "记一顿"),
+    h("a", { class: "btn small ghost dz-edit", href: "#home/eat-plan" }, icon("edit", "xs"), "改计划"));
+  view.append(budget, dietReviewLine(),
+    h("div", { class: "dz-head" }, h("h2", {}, "今天吃的"), acts),
+    usual, line);
+}
+
+// 热量目标调整过（IronM 复盘里调的）：一行写明、能撤销（原来在今天吃的上面，§163）
+function dietReviewLine() {
+  const box = h("div", { class: "diet-review", hidden: true });
+  api("/iron/api/diet/review").then((r) => {
+    const c = r.current;
+    if (!c) return;
+    const undo = async () => { try { await api("/iron/api/diet/adjust/undo", { method: "POST" }); cache.metrics = null; render(); } catch (err) { box.append(h("p", { class: "error" }, err.message)); } };
+    box.hidden = false;
+    box.replaceChildren(
+      h("div", { class: "dr-text" }, h("b", {}, `热量目标调整过 ${c.kcal > 0 ? "+" : "−"}${Math.abs(c.kcal)} 千卡`),
+        h("small", {}, `${c.reason}（${md(c.since)}起）`)),
+      h("button", { class: "link", type: "button", onclick: undo }, "撤销"));
+  }).catch(() => {});
+  return box;
+}
+
+// 计划里有、今天还没记过的那几顿（§251）
+function planTodo(d, plan) {
+  const set = plan?.sets?.[plan.today_set] || {};
+  return (plan?.slots || MAIN_KINDS).filter((k) => set[k] && !set[k].missing && !d.meals.some((x) => x.kind === k)).map((k) => ({ kind: k, slot: set[k] }));
 }
 
 // 图鉴·食物（§121 需求 7）：在食物库里搜；没搜时一排常搜的词；点开看营养素、带着它记一餐
@@ -3128,7 +3147,7 @@ function imageCredit(image) {
 // 能删、能从库里加 → 记下。点下面一条的替换图标，那一条带回这里，记下后替掉它（原来那条留底）
 function mealForm(getDay, redraw) {
   const st = { photo: null, kind: mealKindNow(), lines: [], whole: null, est: null, replacing: null };
-  const box = h("section", { class: "card meal-form" });
+  const box = h("div", { class: "meal-form" });
   let when = timePick();
   const file = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "sr-only", "aria-label": "传一张照片" });
   const shot = h("span", { class: "mf-shot" }, icon("camera"), h("small", {}, "传照片"));
@@ -3140,7 +3159,6 @@ function mealForm(getDay, redraw) {
   const timeBox = h("div", { class: "mf-time" }, when.el);
   const list = h("div", { class: "mr-list mf-lines" });
   const total = h("b", { class: "num" });
-  const usual = h("div", { class: "hscroll usual-row mf-usual", hidden: true });
   const drawShot = () => {
     shot.replaceChildren(...(st.photo ? [h("img", { src: URL.createObjectURL(st.photo), alt: "这一顿的照片" })]
       : st.replacing?.has_photo ? [h("small", {}, "沿用原来的照片")] : [icon("camera"), h("small", {}, "传照片")]));
@@ -3226,7 +3244,7 @@ function mealForm(getDay, redraw) {
   const reset = () => {
     st.photo = null; st.lines = []; st.whole = null; st.est = null; st.replacing = null;
     note.value = ""; st.kind = mealKindNow(); when = timePick(); timeBox.replaceChildren(when.el);
-    banner.hidden = true; drawShot(); drawKinds(); drawLines(); msg.textContent = "";
+    banner.hidden = true; save.textContent = "记下"; drawShot(); drawKinds(); drawLines(); msg.textContent = "";
   };
   const save = h("button", { class: "btn block", type: "button", disabled: true, onclick: async () => {
     if (!st.whole && !st.lines.length) return;
@@ -3253,24 +3271,25 @@ function mealForm(getDay, redraw) {
     st.whole = st.lines.length ? null : x.macros;
     note.value = x.said || "";
     when = timePick(); if (x.at) when.el.querySelector("input").value = x.at; timeBox.replaceChildren(when.el);
-    banner.hidden = false;
+    banner.hidden = false; save.textContent = "换上";
     banner.replaceChildren(h("span", {}, `正在替换：${x.kind} · ${x.name}`), h("button", { class: "link", type: "button", onclick: reset }, "取消"));
     drawShot(); drawKinds(); drawLines(); msg.textContent = "";
-    box.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  api("/iron/api/meals/usual").then((r) => {  // 常吃的：点一下按选的那一餐直接记
-    if (!r.usual?.length) return;
-    usual.hidden = false;
-    usual.replaceChildren(h("span", { class: "label" }, "常吃的"), ...r.usual.slice(0, 8).map((u) => h("button", { class: "usual-chip", type: "button",
-      onclick: async () => { try { redraw(await api("/iron/api/meals/usual", { method: "POST", body: JSON.stringify({ id: u.id, kind: st.kind }) })); flash(`记下了：${st.kind} · ${u.name}`); } catch (err) { flash(err.message); } } },
-      foodTile(u.name, u.image, "", "sm"), h("span", { class: "uc-text" }, h("b", {}, u.name), h("small", {}, `${Math.round(u.kcal)} 千卡`)))));
-  }).catch(() => {});
   drawShot(); drawKinds(); drawLines();
-  box.append(h("div", { class: "section-head" }, h("h2", {}, "记一顿")), banner,
+  box.append(banner,
     h("div", { class: "mf-top" }, h("label", { class: "mf-pick" }, file, shot), h("div", { class: "mf-side" }, kinds, timeBox)), dropShot,
     note, h("div", { class: "mf-look" }, look), list, h("div", { class: "mr-add" }, h("span", { class: "mr-add-ic" }, icon("plus", "xs")), q), hits,
-    h("div", { class: "mr-total" }, h("span", { class: "muted" }, "合计"), total), save, msg, usual);
-  return { el: box, load };
+    h("div", { class: "mr-total" }, h("span", { class: "muted" }, "合计"), total), save, msg);
+  return { el: box, load, setKind: (k) => { st.kind = k; drawKinds(); }, pick: () => file.click() };
+}
+
+// 记一顿从底下拉出（§251）：替换时带着那一顿；"吃了别的"选好那一餐；相机直接选照片。记下后收起、页面刷新
+function openMealForm(redraw, { replace = null, kind = null, camera = false } = {}) {
+  const form = mealForm(() => null, (d) => { closeSheet(); redraw(d); });
+  openSheet(replace ? `替换${replace.kind}` : "记一顿", form.el);
+  if (replace) form.load(replace);
+  else if (kind) form.setKind(kind);
+  if (camera) form.pick();
 }
 
 // 拍完或点了"填"之后：选哪一餐、几点（§247），再记下；同一餐可以记多条
@@ -3302,71 +3321,62 @@ function logMealSheet(photo, day, redraw, kind0 = null) {
   if (!photo) setTimeout(() => said.focus(), 50);
 }
 
-// 今天吃的（§248，取代 §119、§125 的计划和实际并列）：只列记过的，每条小圆图、名字、几点、逐样克数、替换图标；
-// 没记过、也没有计划的那顿不列。热量调整过（IronM 复盘里调的）时顶上一行写明、能撤销；规则建议去掉了（§163 需求 6）
+// 今天吃的（§251，取代 §248 的按餐分组）：按时间排成一条竖线，左边几点、圆照片、卡片（哪一餐、名字、千卡、逐样克数、蛋白质）；
+// 记过的每顿"替换""删除"一直在、往左滑也能删、点卡片看详情；"现在"一条红线，计划里还没吃的排在后面（按计划吃 / 吃了别的）
 const MAIN_KINDS = ["早餐", "午餐", "晚餐", "加餐"];
-// 有饮食计划时，计划里有的那几顿各一个"按计划吃"，点了直接记下；热量调整过、计划和目标差得多的照旧写在上面
-function todayPlan(d, redraw, meta, form = null) {
-  const review = h("div", { class: "diet-review", hidden: true });
-  api("/iron/api/diet/review").then((r) => {
-    const c = r.current;
-    if (!c) return;
-    const undo = async () => { try { await api("/iron/api/diet/adjust/undo", { method: "POST" }); cache.metrics = null; render(); } catch (err) { review.append(h("p", { class: "error" }, err.message)); } };
-    review.hidden = false;
-    review.replaceChildren(
-      h("div", { class: "dr-text" }, h("b", {}, `热量目标调整过 ${c.kcal > 0 ? "+" : "−"}${Math.abs(c.kcal)} 千卡`),
-        h("small", {}, `${c.reason}（${md(c.since)}起）`)),
-      h("button", { class: "link", type: "button", onclick: undo }, "撤销"));
-  }).catch(() => {});
-  const list = h("div", { class: "tp-list" });
-  const lines = (foods) => h("ul", { class: "tp-foods" }, foods.map((f) => h("li", {},
-    h("span", { class: "tp-food" }, f.name), h("span", { class: "num" }, `${Math.round(f.grams)} 克`), h("span", { class: "num" }, `${Math.round(f.kcal)} 千卡`))));
-  const pic = (img) => (img?.url ? h("img", { class: "tp-thumb", src: img.url, alt: "", loading: "lazy" }) : null);
-  // 每条一张小圆图（§248）：自己传的照片优先，没有用食物配图
-  const entryPic = (x) => {
-    if (x.has_photo) { const box = h("span", { class: "tp-thumb tp-own" }); authedImg(`/iron/api/meals/${x.id}/photo`, box, ""); return box; }
-    return x.image?.url ? h("img", { class: "tp-thumb", src: x.image.url, alt: "", loading: "lazy" }) : h("span", { class: "tp-thumb tp-blank" }, icon("food", "sm"));
+const minutesOf = (t) => { const [a, b] = String(t || "").split(":").map(Number); return a * 60 + b; };
+function todayPlan(d, redraw, plan, record) {
+  const eaten = [...d.meals].sort((a, b) => minutesOf(mealTime(a)) - minutesOf(mealTime(b)));
+  const todo = planTodo(d, plan);
+  const chips = (foods) => (foods?.length ? h("div", { class: "dz-chips" }, foods.map((f) => h("span", { class: "num" }, `${f.name} ${Math.round(f.grams)}g`))) : null);
+  const plate = (x) => {
+    const box = h("span", { class: "dz-plate" });
+    if (x.has_photo) authedImg(`/iron/api/meals/${x.id}/photo`, box, "");
+    else if (x.image?.url) box.append(h("img", { src: x.image.url, alt: "", loading: "lazy" }));
+    else box.append(foodTile(x.name, null));
+    return box;
   };
-  const meal = (k, kcal, state, end, img, ...body) => h("div", { class: `tp-meal ${state}` },
-    h("div", { class: "tp-head" }, pic(img), h("b", {}, k), kcal != null ? h("span", { class: "tp-kcal" }, h("b", { class: "fig-n" }, String(Math.round(kcal))), "千卡") : null, end), ...body);
-  const off = h("div", { class: "diet-review", hidden: true });  // 计划和热量目标差得多（多半改过目标，§190）
-  const draw = (plan) => {
-    const set = plan?.sets?.[plan.today_set] || {};
-    if (plan) meta.textContent = `按${plan.today_set === "weekend" ? "周末" : "工作日"}的计划，一共 ${plan.totals[plan.today_set].kcal} 千卡。`;
-    const sum = plan?.totals?.[plan.today_set]?.kcal, want = plan?.target?.kcal;
-    off.hidden = !(sum && want && Math.abs(sum - want) / want > 0.15);
-    if (!off.hidden) off.replaceChildren(
-      h("div", { class: "dr-text" }, h("b", {}, `饮食计划约 ${sum} 千卡，目标约 ${want} 千卡`),
-        h("small", {}, "差得有点多，可能是改过目标；可以换一份合适的方案，或者在对话里让 IronM 帮你挑。")),
-      h("a", { class: "link", href: "#atlas/plans/diet" }, "去换"));
-    // 下面只列记过的（§248）：没记过、也没有计划的那顿不列；计划里有的那几顿各一个"按计划吃"，点了直接记下
-    const kinds = MEAL_KINDS.filter((k) => d.meals.some((x) => x.kind === k) || (set[k] && !set[k].missing));
-    if (!kinds.length) { list.replaceChildren(h("p", { class: "muted tp-empty" }, "今天还没记，上面记一顿。")); return; }
-    list.replaceChildren(...kinds.map((k) => {
-      const xs = d.meals.filter((x) => x.kind === k);
-      const byPlan = set[k] && !set[k].missing ? h("button", { class: "btn small tp-byplan", type: "button", "aria-label": `${k}按计划吃：${set[k].name}`, onclick: async (e) => {
-        e.currentTarget.disabled = true;
-        try { redraw(await api("/iron/api/diet/plan/log", { method: "POST", body: JSON.stringify({ slot: k }) })); flash(`按计划记下了${k}`); } catch (err) { flash(err.message); e.currentTarget.disabled = false; }
-      } }, "按计划吃") : null;
-      return meal(k, xs.length ? xs.reduce((a, x) => a + x.macros.kcal, 0) : null, xs.length ? "done" : "todo", byPlan, null,
-        ...xs.map((x) => swipeRow(pressable(h("div", { class: "tp-eaten" },
-          h("div", { class: "tp-row" }, entryPic(x),
-            h("span", { class: "tp-name" }, x.name, mealTime(x) ? h("small", { class: "tp-at num" }, mealTime(x)) : null, icon("chevron", "xs")),
-            form ? h("button", { class: "icon-btn tp-swap", type: "button", "aria-label": `替换这一条：${x.name}`, title: "替换", onclick: (e) => { e.stopPropagation(); form.load(x); } }, icon("replace", "sm")) : null),
-          x.foods?.length ? lines(x.foods.map((f) => ({ name: f.name, grams: f.grams, kcal: f.macros.kcal }))) : null), () => mealSheet(x, redraw)),
-        `删除${x.name}`, async () => {
-          await api(`/iron/api/meals/${x.id}`, { method: "DELETE" });
-          redraw(await api("/iron/api/meals")); flash(`删掉了${x.name}`);
-        })));
-    }));
-  };
-  draw(null);
-  api("/iron/api/diet/plan").then(draw).catch(() => {});
+  const head = (kind, name, kcal) => h("div", { class: "dz-row1" }, h("span", { class: "dz-kind" }, kind), h("b", {}, name),
+    h("span", { class: "dz-kc num" }, String(Math.round(kcal)), h("small", {}, " 千卡")));
+  const remove = async (x) => { await api(`/iron/api/meals/${x.id}`, { method: "DELETE" }); redraw(await api("/iron/api/meals")); flash(`删掉了${x.name}`); };
+  const rows = [];
+  let last = null;
+  for (const x of eaten) {
+    const t = mealTime(x);
+    if (last != null && minutesOf(t) - last >= 180) {
+      const g = minutesOf(t) - last;
+      rows.push(h("div", { class: "dz-gap past" }, h("span"), h("i"), h("small", {}, `隔了 ${Math.floor(g / 60)} 小时${g % 60 ? ` ${g % 60} 分` : ""}`)));
+    }
+    last = minutesOf(t);
+    const card = h("div", { class: "dz-card" }, head(x.kind, x.name, x.macros.kcal), chips(x.foods),
+      h("div", { class: "dz-meta" }, h("span", { class: "dz-pro" }, `蛋白 ${Math.round(x.macros.protein_g)}g`),
+        h("span", { class: "dz-acts" },
+          h("button", { class: "dz-btn", type: "button", "aria-label": `替换这一顿：${x.name}`, onclick: (e) => { e.stopPropagation(); record({ replace: x }); } }, "替换"),
+          h("button", { class: "dz-btn del", type: "button", "aria-label": `删除这一顿：${x.name}`, onclick: async (e) => {
+            e.stopPropagation(); e.currentTarget.disabled = true;
+            try { await remove(x); } catch (err) { flash(err.message); e.currentTarget.disabled = false; }
+          } }, "删除"))));
+    rows.push(h("div", { class: "dz-row past" }, h("span", { class: "dz-time num" }, t), plate(x),
+      swipeRow(pressable(card, () => mealSheet(x, redraw)), `删除${x.name}`, () => remove(x))));
+  }
+  rows.push(h("div", { class: "dz-now", role: "separator", "aria-label": `现在 ${hhmm()}` }, h("span", { class: "num" }, hhmm()), h("i"), h("small", {}, "现在")));
+  for (const { kind, slot } of todo) {
+    rows.push(h("div", { class: "dz-row todo" }, h("span", { class: "dz-time" }, "计划"), plate(slot),
+      h("div", { class: "dz-card todo" }, head(kind, slot.name, slot.kcal), chips(slot.foods),
+        h("div", { class: "dz-meta" }, h("span", {}, "还没吃"), h("span", { class: "dz-pro" }, `蛋白 ${Math.round(slot.protein_g)}g`)),
+        h("div", { class: "dz-plan-acts" },
+          h("button", { class: "btn small", type: "button", "aria-label": `${kind}按计划吃：${slot.name}`, onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try { redraw(await api("/iron/api/diet/plan/log", { method: "POST", body: JSON.stringify({ slot: kind }) })); flash(`按计划记下了${kind}`); } catch (err) { flash(err.message); e.currentTarget.disabled = false; }
+          } }, "按计划吃"),
+          h("button", { class: "link", type: "button", onclick: () => record({ kind }) }, "吃了别的")))));
+  }
+  const empty = !eaten.length && !todo.length ? h("p", { class: "muted dz-empty" }, "今天还没记，点下面“记一顿”。") : null;
   // 今天删掉的（§247）：不算热量，留底能查
   const gone = d.deleted?.length ? h("details", { class: "tp-gone" }, h("summary", {}, `今天删掉的 ${d.deleted.length} 条`),
     h("ul", {}, d.deleted.map((x) => h("li", {}, h("span", {}, `${x.kind} · ${x.name}`),
       h("small", { class: "muted num" }, `${Math.round(x.macros.kcal)} 千卡 · 记于 ${mealTime(x)} · 删于 ${hhmm(new Date(x.deleted))}`))))) : null;
-  return h("div", { class: "today-plan" }, meta, off, review, list, gone);  // 计划说明放进面板里（草地上看不清，§131）
+  return h("div", { class: "dz-day" }, empty, h("div", { class: "dz-line" }, rows), gone);
 }
 
 // 往左滑露出"删除"（§245）：滑过一半松手停在打开，不到一半弹回；滑开另一行时这一行收回。
@@ -3435,8 +3445,9 @@ function timePick() {
 const mealTime = (x) => x.at || (x.created ? hhmm(new Date(x.created)) : "");
 
 
-// 今日余额（§125）：还能吃多少（大字）、已吃和目标、进度条；下面一排三大营养
-function todayBudget(d, m) {
+// 今日余额（§251，取代 §125 的体力条）：还能吃（大字）、已吃和目标；热量条按顿分段（没吃的计划是虚线）；
+// 蛋白质、碳水、脂肪各一条细条，颜色绿、琥珀、紫，不用黑色
+function todayBudget(d, m, plan = null) {
   const t = d.target, tot = d.totals;
   if (!t) {
     return h("div", { class: "card" },
@@ -3446,21 +3457,34 @@ function todayBudget(d, m) {
   }
   const kcal = m.kcal_target, protein = m.protein_target;
   const pt = protein?.display ? Number(String(protein.display).split("–")[0]) : t.protein_g;
-  const left = Math.round(t.kcal - tot.kcal), pct = Math.min(100, Math.round((tot.kcal / t.kcal) * 100));
-  const macro = (name, have, target, cls) => h("div", { class: `bg-macro ${cls}` }, h("span", {}, name),
-    h("b", { class: "fig-n" }, String(Math.round(have)), h("small", {}, target ? `/${Math.round(target)} 克` : "克")));
-  // 体力条（§131）：今天还能吃的占目标的多少，吃一顿掉一截
-  const energy = h("div", { class: "energy", role: "img", "aria-label": `体力还剩 ${Math.max(0, 100 - pct)}%` }, h("i", { style: `height:${Math.max(0, 100 - pct)}%` }));
-  return h("section", { class: "budget with-energy" }, energy, h("div", { class: "budget-main" },
-    h("span", { class: "label" }, left >= 0 ? "今天还能吃" : "今天多吃了"),
-    h("div", { class: "bg-big fig-n" }, String(Math.abs(left)), h("small", {}, "千卡")),
-    h("p", { class: "muted" }, `已经吃了 ${Math.round(tot.kcal)}，今天的目标是 ${Math.round(t.kcal)} 千卡。`),
-    h("div", { class: "thin-bar" }, h("span", { style: `width:${pct}%` })),
-    h("div", { class: "bg-macros" }, macro("蛋白质", tot.protein_g, pt, "p"), macro("碳水", tot.carbs_g, null, "c"), macro("脂肪", tot.fat_g, null, "f")),
+  const left = Math.round(t.kcal - tot.kcal);
+  const todo = planTodo(d, plan);
+  const todoKcal = todo.reduce((a, x) => a + x.slot.kcal, 0), todoPro = todo.reduce((a, x) => a + x.slot.protein_g, 0);
+  const eaten = [...d.meals].sort((a, b) => minutesOf(mealTime(a)) - minutesOf(mealTime(b)));
+  const rest = Math.max(0, t.kcal - tot.kcal - todoKcal);
+  const seg = h("div", { class: "dz-seg", role: "img", "aria-label": `已吃 ${Math.round(tot.kcal)} 千卡，目标 ${Math.round(t.kcal)} 千卡` },
+    eaten.map((x, i) => h("span", { class: `s${i % 3}`, style: `flex:${Math.max(1, x.macros.kcal)}` })),
+    todo.map((x) => h("span", { class: "plan", style: `flex:${Math.max(1, x.slot.kcal)}` })),
+    rest ? h("span", { class: "rest", style: `flex:${rest}` }) : null);
+  const bar = (have, target, color) => (target ? h("div", { class: "dz-mbar" }, h("i", { style: `width:${Math.min(100, Math.round((have / target) * 100))}%;background:var(${color})` })) : null);
+  const macro = (name, have, target, color, tip) => h("div", { class: "dz-mac" }, h("span", {}, name),
+    h("b", { class: "num" }, String(Math.round(have)), h("small", {}, target ? ` / ${Math.round(target)} 克` : " 克")), bar(have, target, color), tip);
+  return h("section", { class: "dz-bal" },
+    h("div", { class: "dz-bal-top" },
+      h("div", {}, h("span", { class: "label" }, left >= 0 ? "今天还能吃" : "今天多吃了"),
+        h("div", { class: "dz-big num" }, String(Math.abs(left)), h("small", {}, "千卡"))),
+      h("p", { class: "dz-of" }, "已吃 ", h("b", { class: "num" }, String(Math.round(tot.kcal))), h("br"), `目标 ${Math.round(t.kcal)}`)),
+    seg,
+    h("div", { class: "dz-seg-l" }, h("span", {}, eaten.length ? `吃了 ${eaten.length} 顿` : "还没记"),
+      h("span", {}, todoKcal ? `虚线是还没吃的计划 ${Math.round(todoKcal)}` : left >= 0 ? `还剩 ${left}` : `超出 ${-left}`)),
+    h("div", { class: "dz-macs" },
+      macro("蛋白质", tot.protein_g, pt, "--dz-pro", todoPro ? h("p", { class: "dz-tip" }, `按计划吃完到 ${Math.round(tot.protein_g + todoPro)} 克`) : null),
+      macro("碳水", tot.carbs_g, t.carbs_g, "--dz-carb"),
+      macro("脂肪", tot.fat_g, t.fat_g, "--dz-fat")),
     h("button", { class: "link bg-how", type: "button", onclick: () => openSheet("今日目标怎么算的",
       ...[kcal, protein, m.bmr, m.tdee].filter((x) => x && x.value != null).map((x) => h("div", {}, h("h3", {}, x.name), h("dl", { class: "facts" },
         [["结论", x.text], ["怎么算的", x.how], ["依据", x.source]].filter(([, v]) => v).map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))))),
-      observedBox()) }, "目标怎么算的", icon("chevron", "xs"))));
+      observedBox()) }, "目标怎么算的", icon("chevron", "xs")));
 }
 
 async function loadPhoto(id, box) {
@@ -3741,39 +3765,83 @@ function recipeEditSheet(x, reload) {
     steps, go, msg, h("p", { class: "caption" }, "只有你自己能看到；营养按食物库算。"));
 }
 
-// 饮食计划：工作日、周末各一套；今天那套显示在"今天吃什么"里（§119），这里是改计划
-async function planEditSheet(p, reload) {
+// 饮食计划（§251，取代原来每顿一个下拉框的弹层）：工作日 / 周末各一套；上面合计对目标，下面四顿各一张卡（替换、清空，
+// 空的"选一样"）；替换从底下拉出，能搜、分四类、写换了以后多几千卡；最下面换一整套去方案库
+async function dietPlanPage(view) {
+  let p = await api("/iron/api/diet/plan");
   let set = p.today_set;
-  const body = h("div", { class: "sheet-stack" });
   const [rec, usual, pre] = await Promise.all([api("/iron/api/recipes").catch(() => ({ recommended: [], mine: [] })),
     api("/iron/api/meals/usual").catch(() => ({ usual: [] })), api("/iron/api/meals/presets").catch(() => ({ presets: [] }))]);
   const options = [
-    ...usual.usual.map((u) => ({ group: "常吃的", ref: { type: "meal", id: u.id }, name: u.name, kcal: u.kcal })),
-    ...rec.mine.map((r) => ({ group: "我的食谱", ref: { type: "mine", id: r.id }, name: r.name, kcal: r.per_serving.kcal })),
-    ...rec.recommended.map((r) => ({ group: "推荐食谱", ref: { type: "recipe", id: r.id }, name: r.name, kcal: r.per_serving.kcal })),
-    ...pre.presets.map((x) => ({ group: "减脂餐", ref: { type: "preset", id: x.id }, name: x.name, kcal: x.kcal })),
+    ...usual.usual.map((u) => ({ group: "常吃的", ref: { type: "meal", id: u.id }, name: u.name, kcal: u.kcal, protein_g: u.protein_g, image: u.image })),
+    ...rec.mine.map((r) => ({ group: "我的食谱", ref: { type: "mine", id: r.id }, name: r.name, kcal: r.per_serving.kcal, protein_g: r.per_serving.protein_g, image: r.image })),
+    ...rec.recommended.map((r) => ({ group: "推荐食谱", ref: { type: "recipe", id: r.id }, name: r.name, kcal: r.per_serving.kcal, protein_g: r.per_serving.protein_g, image: r.image })),
+    ...pre.presets.map((x) => ({ group: "减脂餐", ref: { type: "preset", id: x.id }, name: x.name, kcal: x.kcal, protein_g: x.protein_g, image: x.image })),
   ];
-  const put = async (slot, ref) => {
-    try { p = await api("/iron/api/diet/plan", { method: "PUT", body: JSON.stringify({ set, slot, ref }) }); draw(); reload(); } catch (err) { flash(err.message); }
+  const body = h("div", { class: "dz-plan" });
+  const put = async (slot, ref, done) => {
+    try { p = await api("/iron/api/diet/plan", { method: "PUT", body: JSON.stringify({ set, slot, ref }) }); draw(); flash(done); } catch (err) { flash(err.message); }
   };
   const draw = () => {
-    const slots = p.sets[set], tot = p.totals[set];
+    const slots = p.sets[set] || {}, tot = p.totals[set], want = p.target;
+    const diff = want ? tot.kcal - want.kcal : 0;
+    const far = want && Math.abs(diff) / want.kcal > 0.15;
+    const scale = want ? Math.max(tot.kcal, want.kcal * 1.18) : Math.max(1, tot.kcal);
+    const sum = h("div", { class: "dz-sum" },
+      h("div", { class: "dz-sum-r" }, h("span", {}, "这一套"), want ? h("span", {}, `每天目标 ${want.kcal} 千卡`) : null),
+      h("div", { class: "dz-sum-r" }, h("b", { class: "num" }, String(tot.kcal), h("small", {}, "千卡")),
+        want ? h("span", {}, diff === 0 ? "正好" : diff < 0 ? `比目标少 ${-diff}` : `比目标多 ${diff}`) : null),
+      h("div", { class: "dz-tbar", role: "img", "aria-label": `这一套 ${tot.kcal} 千卡${want ? `，目标 ${want.kcal}` : ""}` },
+        h("i", { style: `width:${Math.min(100, (tot.kcal / scale) * 100)}%` }), want ? h("u", { style: `left:${(want.kcal / scale) * 100}%` }) : null),
+      h("div", { class: "dz-sum-r small" }, h("span", {}, "蛋白质 ", h("b", { class: "dz-pro" }, String(tot.protein_g)), want ? ` / ${want.protein_g} 克` : " 克"),
+        want ? h("span", {}, "竖线是目标") : null),
+      far ? h("p", { class: "dz-warn" }, diff < 0 ? "比目标少了不少：可以把哪一顿换大一点，或者换一整套方案。" : "比目标多了不少：可以把哪一顿换小一点，或者换一整套方案。") : null);
+    const card = (k) => {
+      const x = slots[k];
+      if (!x) return h("div", { class: "dz-slot empty" }, h("span", { class: "dz-th" }, icon("plus")),
+        h("div", { class: "dz-tx" }, h("small", {}, k), h("b", {}, "空着")),
+        h("div", { class: "dz-sacts" }, h("button", { class: "dz-btn go", type: "button", onclick: () => planPickSheet(k, null, options, (o) => put(k, o.ref, `${k}选了${o.name}`)) }, "选一样")));
+      return h("div", { class: "dz-slot" }, h("span", { class: "dz-th" }, foodTile(x.name, x.image, "", "md")),
+        h("div", { class: "dz-tx" }, h("small", {}, k), h("b", {}, x.name),
+          x.missing ? h("span", { class: "error" }, "原来选的已经没有了") : h("span", { class: "num" }, `${Math.round(x.kcal)} 千卡 · `, h("em", {}, `蛋白 ${Math.round(x.protein_g)}g`))),
+        h("div", { class: "dz-sacts" },
+          h("button", { class: "dz-btn", type: "button", "aria-label": `替换${k}：${x.name}`, onclick: () => planPickSheet(k, x, options, (o) => put(k, o.ref, `${k}换成了${o.name}`)) }, "替换"),
+          h("button", { class: "dz-btn del", type: "button", "aria-label": `清空${k}`, onclick: () => put(k, null, `清空了${k}`) }, "清空")));
+    };
     body.replaceChildren(
-      h("div", { class: "seg seg-2", role: "tablist" }, [["weekday", "工作日"], ["weekend", "周末"]].map(([k, n]) => h("a", { href: "#home/eat", role: "tab", class: set === k ? "on" : "", onclick: (e) => { e.preventDefault(); set = k; draw(); } }, n))),
-      ...p.slots.map((k) => {
-        const sel = h("select", { "aria-label": `${k}吃什么`, onchange: (e) => { const o = options[Number(e.target.value)]; put(k, o ? o.ref : null); } },
-          h("option", { value: "" }, "空着"),
-          ...["常吃的", "我的食谱", "推荐食谱", "减脂餐"].map((g) => {
-            const os = options.map((o, i) => [o, i]).filter(([o]) => o.group === g);
-            return os.length ? h("optgroup", { label: g }, os.map(([o, i]) => h("option", { value: String(i), selected: slots[k] && slots[k].type === o.ref.type && slots[k].id === o.ref.id ? true : null }, `${o.name} · ${Math.round(o.kcal)} 千卡`))) : null;
-          }));
-        return h("label", { class: "pm-row" }, h("span", {}, h("b", {}, k), slots[k]?.missing ? h("small", { class: "error" }, "原来选的已经没有了") : null), sel);
-      }),
-      h("p", { class: "muted" }, `这一套合计 ${tot.kcal} 千卡、蛋白质 ${tot.protein_g} 克${p.target ? `；每天目标 ${p.target.kcal} 千卡、蛋白质 ${p.target.protein_g} 克` : ""}`),
-      h("p", { class: "caption" }, "新选的食谱按 1 份算；只有你自己能看到。想换一整套，去图鉴的饮食方案库。"));
+      h("div", { class: "seg seg-2 dz-sets", role: "tablist" }, [["weekday", "工作日"], ["weekend", "周末"]].map(([k, n]) => h("a", { href: "#home/eat-plan", role: "tab", class: set === k ? "on" : "", "aria-selected": String(set === k), onclick: (e) => { e.preventDefault(); set = k; draw(); } }, n))),
+      sum, ...p.slots.map(card),
+      h("a", { class: "dz-lib", href: "#atlas/plans/diet" }, h("span", {}, h("b", {}, "换一整套"), h("small", {}, "去饮食方案库挑，换了能撤销")), icon("chevron", "sm")),
+      h("p", { class: "caption" }, "食谱按 1 份算，只有你自己看得到。"));
   };
   draw();
-  openSheet("饮食计划", body);
+  view.append(body);
+}
+
+// 换一样（§251）：能搜；常吃的、我的食谱、推荐食谱、减脂餐四类；右边写换了以后这一顿多几千卡；现在用的标"现在的"
+function planPickSheet(slot, current, options, onPick) {
+  const groups = ["常吃的", "我的食谱", "推荐食谱", "减脂餐"].filter((g) => options.some((o) => o.group === g));
+  const same = (o) => current && o.ref.type === current.type && o.ref.id === current.id;
+  let cat = options.find(same)?.group || (groups.includes("推荐食谱") ? "推荐食谱" : groups[0]);
+  const q = h("input", { type: "search", placeholder: "搜食谱：三文鱼、牛肉…", "aria-label": "搜" });
+  const cats = h("div", { class: "pills dz-cats" });
+  const list = h("div", { class: "dz-opts" });
+  const draw = () => {
+    const word = q.value.trim();
+    cats.hidden = !!word;
+    cats.replaceChildren(...groups.map((g) => h("button", { class: `pill${g === cat ? " on" : ""}`, type: "button", "aria-pressed": String(g === cat), onclick: () => { cat = g; draw(); } }, g)));
+    const shown = options.filter((o) => (word ? o.name.includes(word) : o.group === cat));
+    list.replaceChildren(...(shown.length ? shown.map((o) => {
+      const d = current ? Math.round(o.kcal - current.kcal) : null;
+      return h("button", { class: `dz-opt${same(o) ? " cur" : ""}`, type: "button", onclick: () => { if (same(o)) { closeSheet(); return; } closeSheet(); onPick(o); } },
+        foodTile(o.name, o.image, "", "md"),
+        h("span", { class: "dz-tx" }, h("b", {}, o.name), h("span", { class: "num" }, `${Math.round(o.kcal)} 千卡 · `, h("em", {}, `蛋白 ${Math.round(o.protein_g || 0)}g`))),
+        h("span", { class: `dz-d num${d > 0 ? " up" : d < 0 ? " dn" : ""}` }, same(o) ? "现在的" : d == null ? "" : d > 0 ? `+${d}` : d < 0 ? `−${-d}` : "一样"));
+    }) : [h("p", { class: "muted" }, word ? "没找到，换个叫法试试" : "这一类还没有")]));
+  };
+  q.addEventListener("input", draw);
+  draw();
+  openSheet(current ? `换${slot}` : `${slot}选一样`, q, cats, list);
 }
 
 // 推荐这一餐、减脂餐：暂时不在页面上（spec [2026-10-23] §35），接口保留，以后要用时放回饮食页
@@ -5584,6 +5652,7 @@ function msgView(msg) {
     // 没填自己的模型时服务端回这一句（§167）：下面给"去填模型"
     msg.done && (msg.text || "").startsWith(NO_MODEL.slice(0, 22)) ? h("button", { class: "btn small", type: "button", onclick: () => modelSheet() }, "去填模型") : null,
     msg.notices.map((t) => h("div", { class: "msg-note" }, t)),
+    msg.done && msg.options?.length ? optionsView(msg) : null,
     msg.cards.map((c) => cardView(msg, c)),
     msg.error ? h("div", { class: "msg-note" }, msg.error) : null,
     msg.sources ? h("details", { class: "sources", open: msg.srcOpen, ontoggle: (e) => { msg.srcOpen = e.currentTarget.open; } },
@@ -5600,6 +5669,7 @@ function applyBlock(msg, b) {
     case "tool_call":
       if (b.id === "turn") { msg.turn = b.args?.turn || ""; break; }  // 这一轮的编号：评价时带回（spec [2026-10-23] §31）
       if (b.id === "sources") break;
+      if (b.id === "options") { msg.options = (b.args?.options || []).map((o) => ({ ...o })); break; }  // 推荐下面的按钮（§261）
       if (String(b.id || "").startsWith("card-")) { if (!msg.cards.some((c) => c.id === b.id)) msg.cards.push({ id: b.id, kind: b.args?.kind, draft: b.args?.draft, data: null, state: "", busy: false, error: "" }); break; }
       if (!msg.steps.some((x) => x.id === b.id)) msg.steps.push({ id: b.id, name: b.name || "", task: b.args?.["任务"] || "", result: "", done: false });
       break;
@@ -5622,7 +5692,44 @@ function applyBlock(msg, b) {
   }
 }
 
-function coachMsg() { return { role: "coach", turn: "", steps: [], text: "", notices: [], sources: "", cards: [], id: "", error: "", done: false, open: false, srcOpen: false, rating: 0, el: null }; }
+function coachMsg() { return { role: "coach", turn: "", steps: [], text: "", notices: [], sources: "", cards: [], options: [], optLoaded: false, id: "", error: "", done: false, open: false, srcOpen: false, rating: 0, el: null }; }
+
+// 推荐下面的按钮（§261）：吃的"记这顿"直接按推荐时的内容记（不调模型），换动作"换这个"替他发出去；
+// 选没选、过没过期从服务端取（刷新、回看以前的对话也对）
+const MEAL_SLOTS = ["早餐", "午餐", "晚餐", "加餐", "夜宵", "练前", "练后"];
+function mealNow() { const t = new Date().getHours(); return t < 10 ? "早餐" : t < 15 ? "午餐" : t < 21 ? "晚餐" : "夜宵"; }
+async function loadOptions(msg) {
+  try {
+    const live = new Map(((await api("/iron/api/options/recent")).options || []).map((o) => [o.id, o]));
+    for (const o of msg.options) { const now = live.get(o.id); o.expired = !now; if (now) o.chosen = now.chosen; }
+  } catch { /* 读不到：按钮照常，点了由服务端说 */ }
+  refresh(msg);
+}
+function logOption(msg, o) {
+  const pick = async (kind) => {
+    closeSheet(); o.busy = true; refresh(msg);
+    try {
+      const got = await api(`/iron/api/options/${encodeURIComponent(o.id)}/log`, { method: "POST", body: JSON.stringify({ kind }) });
+      o.chosen = true; msg.notices.push(got.receipt);
+    } catch (err) { msg.notices.push(err.message); }
+    o.busy = false; refresh(msg);
+  };
+  const first = mealNow();
+  openSheet("记成哪一餐", h("div", { class: "opt-kinds" },
+    [first, ...MEAL_SLOTS.filter((k) => k !== first)].map((k) => h("button", { class: k === first ? "btn small" : "btn small ghost", type: "button", onclick: () => pick(k) }, k))));
+}
+function optionsView(msg) {
+  if (!msg.optLoaded) { msg.optLoaded = true; loadOptions(msg); }
+  return h("div", { class: "opt-list" }, msg.options.map((o, i) => {
+    const meal = o.kind === "meal";
+    const what = meal ? `${o.label}${o.kcal != null ? ` · 约 ${o.kcal} 千卡` : ""}` : `换成${o.exercise}${o.instead_of ? `（替${o.instead_of}）` : ""}`;
+    const btn = o.chosen ? h("span", { class: "opt-done" }, meal ? "已记" : "已选")
+      : o.expired ? h("span", { class: "opt-done" }, "已过期")
+      : meal ? h("button", { class: "btn small", type: "button", disabled: !!o.busy || chat.busy, onclick: () => logOption(msg, o) }, o.busy ? "在记…" : "记这顿")
+      : h("button", { class: "btn small ghost", type: "button", disabled: chat.busy, onclick: () => ask(`换成${o.exercise}${o.instead_of ? `，替掉${o.instead_of}` : ""}`) }, "换这个");
+    return h("div", { class: "opt-row" }, h("span", { class: "opt-no" }, String(i + 1)), h("span", { class: "opt-what" }, what), btn);
+  }));
+}
 
 // 预览卡片（计划、训练记录、临时调整）：确认才写入，写入后能撤销；状态从服务端取（刷新后也对）
 const CARD_STATE = { pending: "", confirmed: "已保存", cancelled: "已取消", undone: "已撤销" };
@@ -6571,52 +6678,106 @@ function msgChanges(m) {
 const decidedLine = (m) => (m.decided ? `${DECIDED[m.decided.decision] || "已处理"} · ${md(msgDay(m.decided.at))} ${msgTime(m.decided.at)}` : "");
 let msgTab = "coach";
 let msgSeen = { coach: null, system: null };  // 这次打开之前每个页签看到什么时候：之后的算没看过（§238）
-// 一条消息：标题、一句话、几点，下面一排能做的事（§236）。IronM 的点标题看详情；系统的有去处就点过去
+// 一条消息（§253，取代 §236 的一行）：IronM 发来的一句话——左边头像，右边气泡；气泡里先是这件事（加粗）和理由，
+// 下面按内容带一个"附件"：改了数的两根条、下次目标每个动作一张小卡、一次改了几处的一条一行；能撤回去的"不用这样调"；
+// 点过的写选择和时间；最下面几点。没看过的气泡右上角一个点（§238）。点气泡看"它为什么这么做"；系统的有去处就点过去
+// 改了数的：改之前写着数，标题里写了调高 / 调低多少（或改成多少），就能算出现在的数
+function msgNumbers(m) {
+  const b = String(m.before || "").match(/-?\d+(?:\.\d+)?/);
+  if (!b) return null;
+  const before = Number(b[0]), unit = String(m.before).slice(b.index + b[0].length).trim();
+  const step = m.title.match(/(上调|下调|调高|调低|增加|减少|加|减)\s*(\d+(?:\.\d+)?)/);
+  const to = m.title.match(/(?:改成|调到|调成|变成)\s*(\d+(?:\.\d+)?)/);
+  const after = step ? (/下调|调低|减少|减/.test(step[1]) ? before - Number(step[2]) : before + Number(step[2])) : to ? Number(to[1]) : null;
+  return after == null ? null : { before, after: Math.round(after * 10) / 10, unit };
+}
+const exPic = (name) => { const x = cache.exercises?.exercises?.find((e) => e.name === name); return x?.images?.[0]?.url || x?.gif?.url || ""; };
+function msgAttach(m, ch, coach) {
+  if (!coach) return null;
+  const nums = msgNumbers(m);
+  if (nums) {
+    const top = Math.max(nums.before, nums.after) || 1;
+    const bar = (word, v, now) => h("div", { class: "mc-bar" }, h("span", {}, word), h("i", { class: now ? "now" : "", style: `width:${Math.max(6, Math.round((v / top) * 100))}%` }), h("b", { class: "num" }, String(v)));
+    return h("div", { class: "mc-att mc-chg", role: "img", "aria-label": `之前 ${nums.before}，现在 ${nums.after}${nums.unit}` }, bar("之前", nums.before, false), bar("现在", nums.after, true));
+  }
+  if (m.before) return h("p", { class: "mc-att mc-diff" }, "之前 ", h("s", {}, m.before), " → 现在 ", h("b", {}, ch.title));
+  if (!ch.lines.length) return msgPlanAtt(m.title);
+  const goals = ch.lines.map((t) => t.match(/^(.+?)\s+下次\s+(.+)$/));
+  if (goals.every(Boolean)) {  // 下次目标：每个动作一张小卡
+    return h("div", { class: "mc-att mc-cards" }, goals.map(([, name, what]) => {
+      const pic = exPic(name);
+      return h("div", { class: "mc-card" }, h("span", { class: "mc-pic" }, pic ? h("img", { src: pic, alt: "", loading: "lazy" }) : icon("dumbbell", "sm")),
+        h("b", { class: "num" }, what.replace(/公斤/g, "kg")), h("small", {}, name));
+    }));
+  }
+  return h("ul", { class: "mc-att mc-lines" }, ch.lines.map((t) => h("li", {}, t)));
+}
+// 说到某次训练、某几天的（挪到周四、周三减一组）：那次训练的小人（亮它练的肌肉，按计划里的动作）和一周七格（说到的那几天标出来，
+// 挪的写旧的划掉、新的亮）。计划里找不到这次训练就只放七格；连哪天都没说就不放（§253 补：负责人"怎么全是文字"）
+const WEEK_WORDS = "一二三四五六日";
+function msgPlanAtt(title) {
+  const t = String(title || "");
+  const days = [...t.matchAll(/周([一二三四五六日天])/g)].map((x) => WEEK_WORDS.indexOf(x[1] === "天" ? "日" : x[1]));
+  const s = (planSessions || []).filter((x) => x.name && t.includes(x.name)).sort((a, b) => b.name.length - a.name.length)[0];
+  if (!days.length && !s) return null;
+  const moved = days.length > 1 && /挪到|换到|改到|移到|调到/.test(t);
+  const strip = days.length ? h("div", { class: "mc-week", "aria-hidden": "true" }, [...WEEK_WORDS].map((w, i) =>
+    h("i", { class: moved && i === days[0] ? "was" : days.includes(i) ? "on" : "" }, w))) : null;
+  const fig = s ? bodyFigs(todayMuscles(s.items).main, "mc-figs") : null;
+  return h("div", { class: "mc-att mc-plan" }, fig, h("div", { class: "mc-plan-r" },
+    s ? h("b", {}, s.name, h("small", {}, ` · ${s.items.length} 个动作`)) : null, strip));
+}
+const SYS_ICON = { coach_failed: "alert", video_text: "play", video_plan: "play" };
 function msgRow(m, tab) {
   const coach = tab === "coach";
-  // 不用跳走就看得到改了什么（§240）：有改之前的写"改之前 → 改之后"，几处的每处一行
   const ch = coach ? msgChanges(m) : { title: m.title, lines: [] };
-  const diff = coach && m.before && !ch.lines.length ? h("p", { class: "nt-diff" }, h("s", {}, m.before), " → ", h("span", {}, ch.title)) : null;
-  const what = ch.lines.length ? h("ul", { class: "nt-lines" }, ch.lines.map((t) => h("li", {}, t))) : null;
   const why = coach ? (m.lines?.length ? "" : m.why) : m.text;  // 下次目标的理由已经跟在每个动作后面
-  const sub = h("small", { class: "msg-result" }, coach ? decidedLine(m) : "");  // 他点过的：结果和时间，写在理由下面（§237）
-  const head = h("div", { class: "msg-head" }, h("b", {}, ch.title), diff, what, why ? h("small", {}, why) : null, sub);
+  const sub = h("small", { class: "msg-result" }, coach ? decidedLine(m) : "");  // 他点过的：结果和时间（§237）
   const acts = h("div", { class: "msg-acts" });
   const seenAt = msgSeen[tab], read = Boolean(m.decided) || (seenAt != null && new Date(m.at) <= new Date(seenAt));
-  // 圆点（§238）：没看过的橙色、出问题没看过的深黄，看过的和他操作过的绿色
+  const bub = h("div", { class: "mc-bub" },
+    h("span", { class: "msg-dot", "aria-hidden": "true" }),
+    h("p", { class: "mc-said" }, h("b", {}, ch.title), why ? h("span", {}, why) : null),
+    msgAttach(m, ch, coach), sub, acts, h("time", { datetime: m.at }, msgTime(m.at)));
+  // 圆点（§238）：没看过的橙色、出问题没看过的深黄，看过的和他操作过的不显示
   // 样式名用 nt-row：对话页的回答也叫 msg-row（头像加气泡），撞名会把对话里的头像挤没（11-18）
   const row = h("div", { class: `nt-row${read ? " read" : m.level === "warn" ? " warn" : ""}${m.decided ? " decided" : ""}` },
-    h("span", { class: "msg-dot", "aria-hidden": "true" }), h("div", { class: "msg-main" }, head, acts), h("time", { datetime: m.at }, msgTime(m.at)));
+    coach ? mech(34) : h("span", { class: `mc-sys${m.level === "warn" ? " warn" : ""}`, "aria-hidden": "true" }, icon(SYS_ICON[m.kind] || "info", "sm")), bub);
   if (!coach) {
-    if (m.link) { pressable(head, () => { location.hash = m.link; }); acts.append(h("a", { class: "btn quiet small", href: m.link }, SYS_GO[m.kind] || "去看")); }
+    if (m.link) { pressable(bub, () => { location.hash = m.link; }); acts.append(h("a", { class: "btn quiet small", href: m.link }, SYS_GO[m.kind] || "去看")); }
     return row;
   }
-  pressable(head, () => msgSheet(m));
-  const undo = m.undo ? h("button", { class: "btn quiet small", type: "button", onclick: async () => {
-    undo.disabled = true;
+  pressable(bub, () => msgSheet(m));
+  const undo = m.undo ? h("button", { class: "link mc-undo", type: "button", onclick: async (e) => {
+    e.stopPropagation(); undo.disabled = true;
     try {
       await api("/iron/api/coach/decide", { method: "POST", body: JSON.stringify({ key: m.key, decision: "undo" }) });
       m.undo = false; m.decided = { decision: "undo", at: new Date().toISOString() };
-      sub.textContent = decidedLine(m); row.className = "nt-row read decided"; undo.hidden = true; refreshBell(true);
+      sub.textContent = decidedLine(m); row.className = "nt-row read decided"; undo.hidden = true; live.hidden = true; refreshBell(true);
     } catch (err) { undo.disabled = false; acts.append(h("small", { class: "error" }, err.message)); }  // 已经撤不了的：照实说
-  } }, "撤销") : null;
-  acts.append(undo);  // 只有还撤得回去的才给按钮；只是通知的没有（§240）
+  } }, "不用这样调") : null;
+  const live = h("small", { class: "mc-live", hidden: !undo }, "已经生效");
+  acts.append(live, undo);  // 只有还撤得回去的才给按钮；只是通知的没有（§240）
   return row;
 }
 const SYS_GO = { video_text: "去看方案", video_plan: "去看方案", coach_failed: "去首页重试" };
-// 按天分组，新的在前
+// 按天分段（§253）：每天一个居中的小标签，从早到晚排，最新的在最下面（像对话）
 function msgGroups(items, tab, today = msgDay(new Date().toISOString())) {
   const days = [];
-  for (const m of items) {
+  for (const m of [...items].sort((a, b) => new Date(a.at) - new Date(b.at))) {
     const d = msgDay(m.at);
     if (!days.length || days[days.length - 1][0] !== d) days.push([d, []]);
     days[days.length - 1][1].push(m);
   }
-  return days.map(([d, rows]) => h("section", { class: "msg-day" }, h("h3", {}, msgDayWord(d, today)), h("div", { class: "card msg-card" }, rows.map((m) => msgRow(m, tab)))));
+  return days.map(([d, rows]) => h("section", { class: "msg-day" }, h("h3", {}, h("span", {}, msgDayWord(d, today))), h("div", { class: "mc-list" }, rows.map((m) => msgRow(m, tab)))));
 }
-// IronM 的一条点开：改之前、原因、预期、效果；他点过的写结果和时间；复盘自动做的能"不用这样调"。出处的编号不显示（§29：内部留底，追问才说）
+// IronM 的一条点开（§253）：头像、几点、状态；一条竖线串起来：看到了什么、改了什么、预期、后来的效果、你的选择（有才写）；
+// 去相关页面（有去处才有）、不用这样调（还能撤才有）。出处的编号不显示（§29：内部留底，追问才说）
 function msgSheet(m) {
-  const facts = [["改之前", m.before], ["原因", m.why], ["预期", m.expect], ["后来的效果", m.outcome], ["你的选择", decidedLine(m)]].filter(([, v]) => v);
+  const ch = msgChanges(m), nums = msgNumbers(m);
+  const changed = nums ? `${nums.before} → ${nums.after}${nums.unit ? ` ${nums.unit}` : ""}` : m.before ? `之前 ${m.before} → 现在 ${ch.title}` : ch.lines.join("；");
+  const state = m.decided ? decidedLine(m) : m.undo ? "已经生效" : m.status === "confirm" ? "等你确认" : "";
+  const steps = [["看到了什么", m.why], ["改了什么", changed], ["预期", m.expect], ["后来的效果", m.outcome], ["你的选择", decidedLine(m)]].filter(([, v]) => v);
   const out = h("p", { class: "muted", role: "status" });
   const undo = m.undo
     ? h("button", { class: "btn ghost block", type: "button", onclick: async () => {
@@ -6624,14 +6785,17 @@ function msgSheet(m) {
       try { await api("/iron/api/coach/decide", { method: "POST", body: JSON.stringify({ key: m.key, decision: "undo" }) }); m.undo = false; undo.hidden = true; out.textContent = "好的，已经恢复原来的安排。"; refreshBell(true); }
       catch (err) { undo.disabled = false; out.className = "error"; out.textContent = err.message; }
     } }, "不用这样调") : null;
-  openSheet(m.title, h("p", { class: "muted" }, `${md(msgDay(m.at))} ${msgTime(m.at)}`),
-    m.lines ? h("ul", { class: "tips" }, m.lines.map((t) => h("li", {}, t))) : null,
-    facts.length ? h("dl", { class: "facts" }, facts.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))) : null,
-    undo, out);
+  const go = m.link && m.go ? h("a", { class: "btn block", href: m.link, onclick: () => closeSheet() }, m.go) : null;
+  openSheet(m.title,
+    h("div", { class: "mc-who" }, mech(36), h("span", {}, h("b", {}, "IronM"), h("small", {}, [`${md(msgDay(m.at))} ${msgTime(m.at)}`, state].filter(Boolean).join(" · ")))),
+    steps.length ? h("ol", { class: "mc-story" }, steps.map(([k, v]) => h("li", {}, h("small", {}, k), h("p", {}, v)))) : null,
+    go || undo ? h("div", { class: "mc-btns" }, go, undo) : null, out);
 }
 async function messagesPage(view) {
   let r = await api("/iron/api/messages");
-  const seg = h("div", { class: "seg seg-2", role: "tablist", "aria-label": "消息分类" });
+  exercises().then(() => draw()).catch(() => {});  // 下次目标的小卡要动作图、小人要动作练到的肌肉（§253）
+  api("/iron/api/training").then((t) => { if (t?.plan) { planSessions = t.plan.sessions || []; draw(); } }).catch(() => {});
+  const seg = h("div", { class: "seg seg-2 msg-seg", role: "tablist", "aria-label": "消息分类" });
   const list = h("div", { class: "msg-list" });
   const today = r.days?.[0] || msgDay(new Date().toISOString());  // 服务器的今天（§238：按服务器的本地日期算）
   let day = "", q = "", timer = 0, asked = 0;  // 选的日期、关键字（§239）；都空是今天和昨天
@@ -6655,16 +6819,32 @@ async function messagesPage(view) {
   const pick = h("input", { type: "date", max: today, "aria-label": "按日期查消息", onchange: (e) => { day = e.target.value || ""; load(); } });
   const back = () => { clearTimeout(timer); q = ""; day = ""; find.value = ""; pick.value = ""; load(); };
   const empty = () => (q ? `没找到和「${q}」有关的消息` : day ? "那天没有消息" : "今天和昨天没有消息");
+  const bar = h("div", { class: "msg-search", hidden: true }, h("label", { class: "msg-q" }, icon("search", "sm"), find), pick);
+  // "搜"点了才出搜索框和日期（§253）；有关键字或日期时一直显示
+  const toggle = h("button", { class: "msg-find", type: "button", "aria-label": "搜消息", "aria-expanded": "false", onclick: () => {
+    bar.hidden = !bar.hidden && !q && !day; toggle.setAttribute("aria-expanded", String(!bar.hidden));
+    if (!bar.hidden) find.focus?.();
+  } }, icon("search", "sm"), "搜");
+  let shownTab = null;
   const draw = () => {
     const box = r[msgTab], waiting = msgTab === "coach" ? box.pending : [];
+    if (q || day) bar.hidden = false;
     seg.replaceChildren(...MSG_TABS.map(([k, w]) => h("a", { href: "#messages", role: "tab", class: msgTab === k ? "on" : "", "aria-selected": String(msgTab === k),
-      onclick: (e) => { e.preventDefault(); msgTab = k; draw(); } }, w, r[k].unread ? h("b", { class: "msg-n" }, String(r[k].unread)) : null)));
+      onclick: (e) => { e.preventDefault(); msgTab = k; draw(); } }, w, r[k].unread ? h("b", { class: "msg-n" }, String(r[k].unread)) : null)), toggle);
+    // 等他确认的就是最下面的一个气泡（§253）：列表里同一件事没点过的那条不再出现一次
+    const asking = new Set(waiting.map((x) => x.key));
+    const items = box.items.filter((m) => !(asking.has(m.key) && !m.decided));
     list.replaceChildren(
-      waiting.length ? h("section", { class: "msg-day" }, h("h3", {}, "等你确认"), h("div", { class: "card msg-card msg-pending" }, waiting.map(pendingRow))) : null,
       q || day ? h("div", { class: "msg-on-day" }, h("b", {}, [q ? `「${q}」` : "", day ? md(day) : ""].filter(Boolean).join(" · ")),
         h("button", { class: "link", type: "button", onclick: back }, "回到今天和昨天")) : null,
-      ...msgGroups(box.items, msgTab, today),
-      box.items.length ? null : h("p", { class: "muted msg-empty" }, empty()));
+      ...msgGroups(items, msgTab, today),
+      !items.length && (q || day || !waiting.length) ? h("p", { class: "muted msg-empty" }, empty()) : null,  // 搜了、按日期查了没有的照实说
+      waiting.length ? h("section", { class: "msg-day msg-pending" }, h("h3", {}, h("span", {}, "等你回")),
+        h("div", { class: "mc-list" }, waiting.map((x) => h("div", { class: "nt-row mc-ask" }, mech(34), h("div", { class: "mc-bub" }, pendingRow(x, msgPlanAtt(x.title))))))) : null);
+    if (shownTab !== msgTab && !q && !day && typeof window !== "undefined") {  // 打开、换页签时停在最下面（最新的）
+      shownTab = msgTab;
+      setTimeout(() => window.scrollTo(0, document.documentElement.scrollHeight), 60);
+    }
     if (!seen[msgTab]) {  // 打开哪个页签，那个页签就算看过：数字消掉（要确认的照样算）；圆点这次照旧，下次进来就是绿的
       seen[msgTab] = true;
       const tab = msgTab;
@@ -6673,7 +6853,7 @@ async function messagesPage(view) {
     }
   };
   draw();
-  view.append(seg, h("div", { class: "msg-search" }, h("label", { class: "msg-q" }, icon("search", "sm"), find), pick), list);
+  view.append(seg, bar, list);
 }
 
 const PAGES = {
@@ -6719,6 +6899,8 @@ async function render() {
   closeSheet();
   if (rankTimer) { clearInterval(rankTimer); rankTimer = null; }
   if (liveTick) { clearInterval(liveTick); liveTick = null; }  // 离开训练页：停掉计时（训练本身存在服务端，回来接着计）
+  if (hotTick) { clearInterval(hotTick); hotTick = null; }  // 顶栏热搜只在首页（§252）
+  if ($("bar-hot")) $("bar-hot").hidden = true;
   if (location.hash !== "#plan") planDay = null;
   const seq = ++renderSeq;
   const view = $("view");

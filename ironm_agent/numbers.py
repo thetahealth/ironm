@@ -56,7 +56,7 @@ def traced(
     """value 能否追溯到依据（都按 value 写出的小数位四舍五入）：
 
     - 等于某个依据数值（sources，含 data 与 coefs）；
-    - 等于两个数据值之差、之比（"比去年低了 2 次"）；
+    - 等于两个数据值之差、之和、之比，或变化百分比、占比（"比去年低了 2 次""两样一共 482 千卡""下降约 18.7%"）；
     - 等于数据值乘以资料里的系数（"按 69.2 公斤 × 0.3 克/公斤 ≈ 21 克"）。
     资料自身的数字只认原值，不拿来互相加减乘除，免得数字多的资料凑出任意数。
     """
@@ -70,7 +70,11 @@ def traced(
     if any(same(v) for v in (*sources, *data_pool, *coef_pool)):
         return True
     for i, a in enumerate(data_pool):
-        for b in data_pool[i + 1 :]:
-            if same(abs(a - b)) or (b and same(a / b)) or (a and same(b / a)):
+        for b in data_pool[i + 1 :]:  # 两个数据之差、之比、之和（"两样一共 482 千卡"，§256）
+            if same(abs(a - b)) or same(a + b) or (b and same(a / b)) or (a and same(b / a)):
+                return True
+            # 变化了百分之几、占百分之几（"从 91 降到 74，下降约 18.7%"，§268）
+            pct = [abs(a - b) / x * 100 for x in (a, b) if x] + [a / b * 100 if b else 0, b / a * 100 if a else 0]
+            if any(p and same(p) for p in pct):
                 return True
     return any(same(d * c) for d in data_pool for c in coef_pool)

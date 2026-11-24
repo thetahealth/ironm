@@ -63,5 +63,3 @@ GENERAL = RoleSpec(
 )
 
 
-def spec_of(role: Role) -> RoleSpec:
-    return GENERAL if role is Role.GENERAL else SPECS[role]

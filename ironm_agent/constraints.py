@@ -186,6 +186,85 @@ PREGNANCY = Rule(
     re.compile(r"孕"),
 )
 _BP_RISKS = frozenset({"bp_crisis", "bp_high", "hypertension"})
+# 化验、用药认出的情况（§265 需求 6）；"吃、补、来一勺"这类说法后面跟着补剂才算推荐（说指标时提到"肌酸激酶""维生素 D 偏低"不算）
+# 只拦错了会伤人的，其余（说不说、怎么说、吃多少）由模型判断
+_TAKE = r"(?:吃|补|加|喝|来|冲|用|配|一勺|一份|一杯|一包|一袋|一粒|一片)"
+KIDNEY = Rule(
+    "kidney",
+    re.compile(rf"{_TAKE}[^，,。；;]{{0,4}}(?:肌酸(?!激酶|酐)|蛋白粉|乳清)|(?:加|多吃|多补|提高|增加|补)[^，,。；;\d]{{0,4}}蛋白"),
+    ("医生", "肾内科"),
+    "他肾功能偏低（eGFR < 60）",
+    "肾功能偏低：蛋白质别往上加、不吃肌酸，吃多少蛋白、补剂能不能吃先问肾内科医生。",
+    "（肾功能偏低：先问医生）",
+    "",
+    re.compile(r"肾"),
+)
+HYPO = Rule(
+    "hypoglycemia",
+    re.compile(r"空腹[^，,。；;]{0,6}(?:练|跑|训练|运动|有氧|骑|游)|(?:练|跑|训练|运动|有氧)[^，,。；;]{0,4}空腹"),
+    ("吃", "带糖", "加餐", "血糖", "医生"),
+    "他在用会引起低血糖的降糖药",
+    "你在用的降糖药可能引起低血糖：别空腹练，练前吃点东西、随身带糖。",
+    "（在用降糖药：别空腹练）",
+    "",
+    re.compile(r"低血糖|降糖药"),
+)
+INTENSE = Rule(
+    "intense",
+    re.compile(r"大重量|高强度|HIIT|冲刺|力竭|极限|最大重量|冲重量|冲击 ?PR|测(?:试)? ?1RM|间歇跑|tabata", re.I),
+    ("医生", "评估", "看过", "许可", "复查后", "控制住", "纠正", "放一放", "先放"),
+    "他有贫血、甲功像甲亢或心电图需要医生看",
+    "这种情况先看医生，高强度和大重量先放一放，只做轻松到中等的活动。",
+    "（先看医生，先别做）",
+)
+SUPPLEMENT = Rule(
+    "supplement",
+    re.compile(rf"{_TAKE}[^，,。；;]{{0,4}}(?:肌酸(?!激酶|酐)|鱼油|维生素|补剂|保健品|中药|草本|绿茶提取|燃脂|左旋肉碱|BCAA|支链氨基酸|谷氨酰胺|酵素)", re.I),
+    ("医生", "肝"),
+    "他转氨酶是上限的 3 倍以上",
+    "转氨酶偏高：补剂、保健品先别吃，也别喝酒，先找医生看看。",
+    "（转氨酶偏高：先别吃）",
+    "",
+    re.compile(r"转氨酶|肝"),
+)
+_INTENSE_RISKS = frozenset({"anemia_marked", "hyperthyroid", "ecg_alert"})
+
+
+def _diet_rule(group: str, why: str, fix: str, covers: str) -> Rule:
+    from ironm_agent.body_limits import FOOD_GROUPS
+
+    return Rule(f"diet_{group}", FOOD_GROUPS[group], ("少", "清汤", "无糖", "零度", "医生", "偶尔"), why, fix,
+                f"（{why}：少吃）", "", re.compile(covers))  # fmt: skip
+
+
+# 会持续的身体情况要避开的食物（§269）：推荐里出现又没写限制的退回；一句话提到这件事并写明怎么吃（"尿酸高，汤别喝"）就算照顾到
+DIET_RULES = {
+    "高嘌呤": _diet_rule("高嘌呤", "他尿酸偏高", "尿酸偏高：内脏、浓汤和火锅汤、沙丁鱼和贝类、啤酒少碰。", r"尿酸|嘌呤|痛风"),
+    "含糖饮料": _diet_rule("含糖饮料", "他尿酸偏高", "尿酸偏高：含糖饮料和果汁换成水或无糖的。", r"尿酸|嘌呤|糖"),
+    "高糖": _diet_rule("高糖", "他血糖调控差", "血糖偏高：甜点、含糖饮料少吃，换成无糖的。", r"血糖|控糖|糖"),
+    "高钠": _diet_rule("高钠", "他血压偏高", "血压偏高：咸菜、加工肉、方便面、酱料少吃。", r"血压|盐|钠|咸"),
+    "高饱和脂肪": _diet_rule("高饱和脂肪", "他血脂偏高", "血脂偏高：肥肉、油炸、黄油少吃。", r"血脂|胆固醇|油"),
+    "酒": _diet_rule("酒", "他的身体情况不宜喝酒", "这几项指标偏高：酒先别喝。", r"酒"),
+}
+KIDNEY_PROTEIN = 1.3  # 克/公斤：KDIGO 说有进展风险的肾病避免超过这个量〔K127〕
+_PER_KG = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[-–~至到]\s*(\d+(?:\.\d+)?))?\s*(?:克|g)\s*/\s*(?:公斤|千克|kg)", re.I)
+
+
+def _kidney_protein(text: str) -> Violation | None:
+    """肾功能偏低时建议的蛋白质（克/公斤）高过 KDIGO 说要避免的量。"""
+    for clause in _CLAUSE.findall(text):
+        if "蛋白" not in clause or any(w in clause for w in ("不要超过", "别超过", "不超过", "以内", "医生")):
+            continue
+        for m in _PER_KG.finditer(clause):
+            high = max(float(v) for v in m.groups() if v)
+            if high > KIDNEY_PROTEIN:
+                return Violation(
+                    "kidney_protein",
+                    f"「{clause.strip()[:24]}」建议蛋白质到每公斤 {high:g} 克，他肾功能偏低（eGFR < 60），"
+                    f"不往上加：不超过每公斤 {KIDNEY_PROTEIN:g} 克，具体吃多少请他问肾内科医生",
+                    KIDNEY.fix,
+                )
+    return None
 
 _KCAL = re.compile(r"(\d{3,4})(?:\s*[-–~至到]\s*(\d{3,4}))?\s*(?:千卡|大卡|kcal|卡路里)")
 _DAILY = re.compile(r"每天|每日|一天|全天|日摄入|热量目标|目标热量|总热量|总摄入")
@@ -214,6 +293,7 @@ class Context:
     risks: frozenset[str] = frozenset()
     floor: int = 1200  # 每日摄入下限
     record: str = ""  # 共享档案原文，核对"档案里写了……""状态标了差"这类说法（§49）
+    states: tuple[str, ...] = ()  # 会持续的身体情况（§269）：推荐吃的要避开对应的食物类别
 
     @classmethod
     def of(cls, case: CaseFile) -> Context:
@@ -225,6 +305,7 @@ class Context:
             risks=frozenset(x.key for x in case.risks),
             floor=floor,
             record=case.text(),
+            states=case.body_states,
         )
 
 
@@ -392,6 +473,17 @@ def _rules(ctx: Context) -> list[Rule]:
         rules.append(BLOOD)
     if "pregnancy" in ctx.risks:
         rules.append(PREGNANCY)
+    if "kidney_low" in ctx.risks:
+        rules.append(KIDNEY)
+    if "hypo_drug" in ctx.risks:
+        rules.append(HYPO)
+    if ctx.risks & _INTENSE_RISKS:
+        rules.append(INTENSE)
+    if "alt_high" in ctx.risks:
+        rules.append(SUPPLEMENT)
+    from ironm_agent.body_limits import diet_avoid
+
+    rules += [DIET_RULES[g] for g, _ in diet_avoid(ctx.states) if g in DIET_RULES]
     return rules
 
 
@@ -401,6 +493,8 @@ def check(text: str, ctx: Context) -> list[Violation]:
     found += [
         v for v in (_calories(text, ctx.floor), _rate(text), _macros(text), _record(text, ctx)) if v
     ]
+    if "kidney_low" in ctx.risks and (v := _kidney_protein(text)):
+        found.append(v)
     return found
 
 

@@ -6,13 +6,9 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Literal
 
 from ironm_agent.protools.result import Finding, Result
 
-type Sign = Literal[
-    "snap", "deformity", "cannot_bear", "numbness", "swelling_worse", "worsening", "morning_worse"
-]  # fmt: skip
 SIGNS: dict[str, str] = {
     "snap": "受伤时听到断裂声",
     "deformity": "受伤部位变形",

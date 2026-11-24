@@ -231,7 +231,7 @@ class Recall:
         return "\n\n".join(parts)
 
     def style(self) -> str:
-        """管家整合时要照顾的回答风格与喜好。"""
+        """作答时要照顾的回答风格与喜好。"""
         facts = self._facts(EVERYONE)
         return "\n".join(_line(x) for x in facts)
 

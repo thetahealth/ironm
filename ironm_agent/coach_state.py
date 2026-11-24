@@ -216,7 +216,7 @@ def today_version(inp: Inputs, today: date) -> TodayVersion:
 
     name = weekday_name(today.isoweekday())
     if inp.plan is None:
-        return TodayVersion("no_plan", "还没有训练计划", why="可以让训练教练按你的目标排一份")
+        return TodayVersion("no_plan", "还没有训练计划", why="可以让管家按你的目标排一份")
     from ironm_agent.plan_layers import active, plan_on
 
     session = (plan_on(inp.plan, inp.temps, today) or inp.plan).session_on(today)  # 套上有效的临时调整（§163）
@@ -341,12 +341,6 @@ def _goal_items(inp: Inputs) -> list[Item]:
         out.append(Item(key="retest", kind="retest", title="该复测了", why=p["retest"]["text"],
                         basis="每 4–6 周复测一次（经验）"))  # fmt: skip
     return out
-
-
-def _proposed(inp: Inputs) -> bool:
-    return inp.review is not None and any(
-        d.type == "propose" and not d.undone for d in inp.review.done
-    )
 
 
 def _review_items(inp: Inputs) -> list[Item]:

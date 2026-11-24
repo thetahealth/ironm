@@ -1,7 +1,7 @@
 """iron-m 的 Agent：通过 mirobody 的 Agent 插件接口替换它自带的 Agent。
 
-一轮回答：安全前置（规则）→ 读这个人的记忆 → 三路打分路由（模型、关键字、语义向量）→ 专业 Agent 分层作答
-→ 只请一位时它直接作答、多位时由管家整合 → 规则核对；回答发出后在后台提取这一轮的记忆（不拖慢回答，失败也不影响回答）。
+一轮回答：安全前置（规则）→ 读档案、状态和本会话上下文 → 单 Agent 作答（规程用到再装、工具按需调用）
+→ 规则核对；回答发出后在后台写记忆、要点、身体情况（不拖慢回答，失败也不影响回答）。
 """
 
 from __future__ import annotations
@@ -44,32 +44,33 @@ from ironm_agent.actions import (
     Desk,
     Handler,
     Outcome,
+    drop_log_claims,
 )
 from ironm_agent.agent import EXTRA_TOOLS, respond
 from ironm_agent.attachments import Attachments
 from ironm_agent.attachments import read as read_attachments
+from ironm_agent.body_risks import MUST_SAY, said_alarm
 from ironm_agent.casefile import CaseFile, Snapshot
 from ironm_agent.casefile import build as build_case
+from ironm_agent.chains import branded
 from ironm_agent.checks import plain
 from ironm_agent.clarify import (
     CONFIRMED_NOTE,
     HEAD,
     PLAN_REQUEST,
-    asked,
     conditions,
     confirm_ask,
-    replies,
 )
 from ironm_agent.compose import Composed, revise
 from ironm_agent.constraints import Context, Violation, annotate, annotate_plan
 from ironm_agent.constraints import check as check_constraints
 from ironm_agent.day_state import DayState, DayStore, default_day
 from ironm_agent.day_state import lines as day_lines
-from ironm_agent.exercises import named_in
 from ironm_agent.gear import FORM
 from ironm_agent.goal import GoalStore, default_goal
 from ironm_agent.goal import line as target_line
 from ironm_agent.harness import TraceStore, missing_readings, new_turn, react
+from ironm_agent.healthdata import Lab, labs_line, latest_labs
 from ironm_agent.illness import (
     Episode,
     IllnessStore,
@@ -84,19 +85,24 @@ from ironm_agent.illness import (
     recent as recent_illness,
 )
 from ironm_agent.illness import summary_line as illness_line
-from ironm_agent.indicators import named_indicators, record_kinds
 from ironm_agent.kb import KnowledgeBase, default_kb
 from ironm_agent.llm import ModelsConfig, ModelUnavailable, TurnLLM, load_models
 from ironm_agent.memory import (
     COACH,
     READ_CHAT,
     READ_CHAT_SCHEMA,
+    TURNS_MAX,
     USER,
+    Conversation,
+    Turn,
     chat_tool,
     earlier,
+    fit,
     last_sources,
     recent,
     split_thread,
+    thread,
+    turns_from_lines,
     user_lines,
     whole,
 )
@@ -117,6 +123,7 @@ from ironm_agent.memory_prefs import refresh as refresh_prefs
 from ironm_agent.memory_store import Item, MemoryStore, StaleMemory, default_store
 from ironm_agent.memory_view import Recall, for_extract
 from ironm_agent.metrics import GOALS
+from ironm_agent.options import OptionStore, brief, default_options, option_lines, resolve
 from ironm_agent.personal import Personal, personal_basics
 from ironm_agent.plan_ops import (
     SCOPE_HINT,
@@ -133,7 +140,7 @@ from ironm_agent.plan_ops import (
 from ironm_agent.progression import target_lines
 from ironm_agent.protools.plan_check import check_plan, same_training
 from ironm_agent.protools.registry import ToolContext
-from ironm_agent.provenance import is_provenance, provenance_note
+from ironm_agent.provenance import SOURCES_SCHEMA, SOURCES_TOOL, provenance_note
 from ironm_agent.render import (
     SOURCES_ID,
     SOURCES_NAME,
@@ -152,7 +159,7 @@ from ironm_agent.render import (
     temp_card,
     text_block,
 )
-from ironm_agent.roles import COACH_NAME, GENERAL, Role, spec_of
+from ironm_agent.roles import COACH_NAME, GENERAL, Role
 from ironm_agent.router import concerns_of
 from ironm_agent.safety.emergency import assess
 from ironm_agent.safety.refusals import KINDS as REFUSAL_KINDS
@@ -170,16 +177,25 @@ from ironm_agent.session_summary import (
     SummaryStore,
     default_summaries,
     fresh,
+    promises,
     summarize,
 )
 from ironm_agent.session_summary import due as summary_due
-from ironm_agent.skill_route import route as route_skills
-from ironm_agent.skills import pick_any, pick_routed
+from ironm_agent.skills import situational
 from ironm_agent.special import flags as special_flags
 from ironm_agent.special import is_special
 from ironm_agent.special import rules_text as special_rules
-from ironm_agent.spoken import HELP, REFUSAL_NEEDS, RISK_NEEDS, URGENT, missing, say, urgent_needs
-from ironm_agent.tools import Evidence, Toolbox
+from ironm_agent.spoken import (
+    HELP,
+    NO_TRAINING,
+    REFUSAL_NEEDS,
+    RISK_NEEDS,
+    URGENT,
+    missing,
+    say,
+    urgent_needs,
+)
+from ironm_agent.tools import Toolbox
 from ironm_agent.training import (
     DRAFT_HOURS,
     Plan,
@@ -192,15 +208,18 @@ from ironm_agent.training import (
     parse_plan,
     plan_content,
     schedule_line,
-    task_of,
     trusted_log,
     weekday_name,
 )
 from ironm_agent.triggers import PainStore, default_pain
+from ironm_agent.turn_notes import (
+    SHORT_MIN,
+    NotesStore,
+    default_notes,
+    notes_text,
+    shorten,
+)
 from ironm_agent.video_check import video_note
-from ironm_agent.weather import Weather
-from ironm_agent.weather import case_line as weather_line
-from ironm_agent.weather import for_user as weather_for
 
 _log = logging.getLogger("ironm_agent.run")
 SYNC_WAIT_S = 20  # 作答前最多等上一轮的档案与记忆更新多少秒（spec [2026-10-23] §51）
@@ -304,7 +323,6 @@ def _metric_value(snapshot: Snapshot | None, key: str) -> float | None:
     return float(m.value) if m is not None and m.value is not None else None
 
 
-WEATHER_WAIT_S = 4.0  # 天气最多等 4 秒（同一个地方 10 分钟内有缓存）
 NO_TEXT = "没有收到文字问题。"
 NO_ANSWER = "抱歉，这次没答上来，过一会儿再问我一次吧。"
 # 不做关爱圈（项目负责人决定）：提问人和数据的主人不是同一个人时，不读写对方的数据和记忆
@@ -377,18 +395,71 @@ PREVIEWED_NOTE = (
     "说不行、不好、不喜欢时，复述预览要点，问是哪里不行（动作、天数、时长、强度），不要回到排计划前的确认条件；"
     "他问的是别的事，就只答他问的，不提这份预览、不写计划（§108）。"
 )
-# 明显在问训练的说法：先用规则看要不要拦下或追问，不必等调度（"练完吃什么"不算）
+# 危急情况的安全兜底（§255 需求 3）：明显在问训练的说法，回答里必须说到先别运动、尽快就医。
+# 只用来核对回答，不用来选规程（"练完吃什么""睡不好怎么办"不算）
 _TRAIN_ASK = re.compile(
     r"练什么|怎么练|练啥|还能练|能练|能不能练|去练|练腿|练胸|练背|练肩|练手|练臀|练核心|训练计划|训练安排"
     r"|健身|锻炼|跑步|深蹲|卧推|硬拉|有氧|力量|大重量|课表"
 )
-_NOT_TRAINING = re.compile(
-    r"吃|喝|饮食|热量|蛋白|睡|失眠"
-)  # "运动后吃什么""睡不好怎么办"不是在问训练
+_NOT_TRAINING = re.compile(r"吃|喝|饮食|热量|蛋白|睡|失眠")
+
+
+_SUPPLEMENT = re.compile(r"肌酸|蛋白粉|乳清|补剂|生物素|维生素|鱼油|保健品|药")
+
+
+def _about(snapshot: Snapshot) -> str:
+    """读身体情况时带的基本情况：年龄、性别、目标。"""
+    p = snapshot.profile
+    age = p.age(snapshot.today) if hasattr(p, "age") else None
+    sex = {"male": "男", "female": "女"}.get(str(getattr(p, "sex", "") or ""), "")
+    goal = GOALS.get(p.goal, "") if getattr(p, "goal", None) else ""
+    return "；".join(x for x in (f"{age} 岁" if age else "", sex, f"目标：{goal}" if goal else "") if x)
+
+
+def _weight_kg(snapshot: Snapshot) -> float | None:
+    w = snapshot.readings.weight
+    return max(w, key=lambda p: p[0])[1] if w else None
+
+
+def _body_diet(snapshot: Snapshot | None, today: date, protein: float | None) -> tuple[dict[str, str], float | None, float | None]:
+    """出饮食方案时按会持续的身体情况：要避开的食物类别 → 原因；蛋白质目标和上限（克，肾负担时，§269）。"""
+    from ironm_agent.body_limits import diet_avoid, protein_per_kg, states_of
+
+    if snapshot is None:
+        return {}, protein, None
+    states = states_of(snapshot.readings, today)
+    body = dict(diet_avoid(states))
+    per = protein_per_kg(states)
+    kg = _weight_kg(snapshot)
+    if per and kg:
+        return body, round(per[0] * kg), round(per[1] * kg)
+    return body, protein, None
+
+
+def _library_against_body(p: Any, snapshot: Snapshot, today: date) -> str:
+    """方案库里这份方案和他的身体情况冲突的地方（哪顿有要避开的东西、蛋白质超上限）；没有时为空。"""
+    from ironm_agent.diet_compose import avoided, resolve
+
+    body, _, cap = _body_diet(snapshot, today, None)
+    hits = []
+    for meals in p.days.values():
+        for kind, slot in meals.items():
+            d = resolve(f"{slot.type}:{slot.id}")
+            if d is not None and (got := avoided(d, list(body))):
+                hits.append(f"{kind}（{d.name}）有{'、'.join(got)}的东西（{'；'.join(body[g] for g in got)}）")
+    if cap and p.macros.protein and re.search(r"(\d+(?:\.\d+)?)\s*[–-]?\s*\d*(?:\.\d+)?\s*克/公斤", p.macros.protein):
+        top = max(float(x) for x in re.findall(r"\d+(?:\.\d+)?", p.macros.protein.split("克/公斤")[0]))
+        kg = _weight_kg(snapshot)
+        if kg and top * kg > cap:
+            hits.append(f"蛋白质按每公斤 {top:g} 克配，超过他的上限（肾功能偏低〔K127〕）")
+    return "；".join(dict.fromkeys(hits))
+
+
+_TOLD_DOCTOR = re.compile(r"医生|就医|医院|门诊|急诊|去[^，,。；;]{0,6}科")
 
 
 def asks_training(text: str) -> bool:
-    return bool(_TRAIN_ASK.search(text)) and not _NOT_TRAINING.search(text)
+    return (bool(_TRAIN_ASK.search(text)) and not _NOT_TRAINING.search(text)) or bool(PLAN_REQUEST.search(text))
 
 
 MEMORY_CAP = 8  # 一轮最多交几条记忆（和后台提取一轮最多落几条一样，§145）
@@ -411,40 +482,6 @@ class Prepared:
     snapshot: Snapshot
     plan: Plan | None
     case: CaseFile
-
-
-def _weather_case(w: Weather, plan: Plan | None, today: date) -> str:
-    """共享档案里的天气（spec [2026-10-23] §34）：现在的天气、未来几天的预报。代码不再按天气改本周的训练
-    （§163），要不要改由管家看这些自己定。"""
-    from ironm_agent.weather_plan import forecast_line
-
-    parts = [weather_line(w)]
-    ahead = forecast_line(w.days, today)
-    if ahead:
-        parts.append(f"未来几天：{ahead}")
-    return "。".join(parts)
-
-
-# "尿酸""乳酸""叶酸""氨基酸"里的"酸"不是酸痛（spec [2026-10-23] §39）
-_HURT = re.compile(r"疼|痛|伤|肿|麻|(?<![尿乳叶基胃])酸(?!奶)|不舒服|难受")
-_BETTER_WORDS: dict[str, Any] = {"好了": "resolved", "好些": "better", "没好": "unwell"}
-
-
-def checked_note(named: Sequence[str], found: str, rows: int, ok: bool) -> str:
-    """规则先查的结果，交给专业角色时怎么说（spec [2026-10-23] §37）。"""
-    names = "、".join(named)
-    if not ok:
-        return (
-            f"系统想先查这个人的{names}记录，但这次没能读到健康记录：如实说这次没读到，不推测高低。"
-        )
-    if rows == 0:
-        return (f"系统按问题先查了这个人的健康记录，没有找到{names}的记录。回答的第一句就如实说没有找到这项记录，"
-                "不推测高低，也不要当作已经偏高或偏低去安排训练和饮食；告诉他可以在数据页上传化验单或随手记一条。")  # fmt: skip
-    return (f"系统按问题先查了这个人的健康记录（{names}）：\n{found}\n"
-            "回答的第一句先说他问的这几项：数值、日期，和这里给的参考范围比是偏高、偏低还是在范围内，每项只说一次，"
-            "写成：<statement>你的空腹血糖 5.1 mmol/L（2025-11-12），参考范围 3.9–6.1<cite>[r1]</cite></statement>，在范围内。"
-            "（例子里的数字只是示范，照上面查到的行写，编号用那一行的。）"
-            "这里没有出现的指标就是没有记录，如实说没有。说出数值和参考范围不算诊断。")  # fmt: skip
 
 
 _WEEKDAY = re.compile(r"(?:周|星期|礼拜)[一二三四五六日天]")
@@ -497,7 +534,6 @@ class IronMAgent:
         sources: Callable[[str, str], Awaitable[str | None]] | None = None,
         remember: bool = True,
         observe: Callable[[dict[str, Any]], None] | None = None,
-        weather: Callable[[str], Awaitable[Weather | None]] | None = None,
         pain: PainStore | None = None,
         illness: IllnessStore | None = None,
         day: DayStore | None = None,
@@ -525,6 +561,9 @@ class IronMAgent:
         )
         self._meals: Any = None
         self._diet: Any = None
+        self._body: Any = None  # 身体情况（§265）；None 用数据库里的，测试里换成内存版
+        self._reports: Any = None  # 读体检报告的方式（§265）；None 读 mirobody 存的文件原文
+        self._body_busy: set[str] = set()  # 正在后台读身体情况的人（别同时读两遍）
         self._kitchen: Any = None  # 自建食谱和饮食计划（§190）；测试里换成内存版
         self._coach_cache: dict[str, tuple[date, Any]] = {}  # 同一轮只读一次管家方案（§97）
         self._memory_cache: dict[str, list[Item]] = {}  # 同一轮只读一次记忆（§206）
@@ -532,7 +571,6 @@ class IronMAgent:
         self._web_log: Any = None  # 联网查询的待审清单；None 用数据库里的
         self._goals = goals  # 目标体重和日期（排新计划前追问时带上，spec [2026-10-23] §55）
         self._day = day  # 今日状态（spec [2026-10-23] §54，默认用数据库里 iron-m 自己的表）
-        self._weather = weather  # 这个人所在城市的天气（默认按"我的"里设置的城市去取）
         self._snapshot = snapshot  # 这个人的档案、健康数据与指标（默认与数据页同一份计算）
         self._files: dict[str, Any] = dict(files or {})  # 读附件的方式（测试时换成假的）
         self._memory = memory  # 长期记忆（默认用数据库里 iron-m 自己的表）
@@ -544,6 +582,11 @@ class IronMAgent:
             None  # 测试时换掉读整个会话
         )
         self._earlier = earlier
+        # 本会话一问一答的原文（§254）；None 时读 mirobody 的对话记录，注入了 history 的考题按那几行排
+        self._turns: Callable[[str, str], Awaitable[list[Turn]]] | None = None
+        self._notes: NotesStore | None = None  # 每轮查到和做了的（§254）；None 用数据库里 iron-m 自己的表
+        self._labs: Callable[[str], Awaitable[list[Lab]]] | None = None  # 化验最近一次（§255）；None 读 mirobody
+        self._options: OptionStore | None = None  # 推荐过的选项（§259）；None 用数据库里 iron-m 自己的表
         self._sources = sources
         self._remember_on = remember
         # 今天的状态、记忆在回答发出后由管家在后台读了再记（§166）；False 时照 §122、§145 作答时当场调工具
@@ -639,15 +682,6 @@ class IronMAgent:
             found=found,  # 这一轮已经算好的事实（§84），和档案里的指标解读一致
             special=special_flags(snapshot.profile, case.risks, snapshot.today),  # §95
         )
-
-    async def _read_weather(self, user_id: str) -> Weather | None:
-        """天气取不到或太慢时当作没有，不影响作答（spec [2026-10-23] §13）。"""
-        source = self._weather or weather_for
-        try:
-            return await asyncio.wait_for(source(user_id), WEATHER_WAIT_S)
-        except Exception as e:
-            _log.warning("weather unavailable: error_type=%s", type(e).__name__)
-            return None
 
     def _pain_store(self) -> PainStore:
         if self._pain is None:
@@ -762,6 +796,146 @@ class IronMAgent:
             rows = []
         self._memory_cache[user_id] = rows
         return list(rows)
+
+    def _meal_history_tool(self, user_id: str, snapshot: Snapshot) -> dict[str, Any]:
+        """查往日饮食（§261）：最近几天每天吃了哪几顿、合计和目标比；今天的在档案里。"""
+        from ironm_agent.meals import MEAL_HISTORY, MEAL_HISTORY_SCHEMA, history_lines
+
+        by = {m.key: m.value for m in snapshot.metrics}
+
+        async def run(_: Any, args: Mapping[str, Any]) -> str:
+            try:
+                days = max(1, min(30, int(args.get("days") or 7)))
+            except (TypeError, ValueError):
+                days = 7
+            try:
+                rows = await self._meals_store().since(user_id, snapshot.today - timedelta(days=days))
+            except Exception as e:
+                _log.warning("meals unavailable: error_type=%s", type(e).__name__)
+                return "这次没读到饮食记录，如实说没查到。"
+            return history_lines(rows, snapshot.today, days, by.get("kcal_target"), by.get("protein_target"))
+
+        return {MEAL_HISTORY: (MEAL_HISTORY_SCHEMA, run)}
+
+    def _sources_tool(self, session_id: str) -> dict[str, Any]:
+        """他追问上一条回答的数、说法从哪来时，作答的模型调它取上一条的依据与来源（§255 需求 3，§86）。"""
+
+        async def run(_: Any, __: Mapping[str, Any]) -> str:
+            return provenance_note(await (self._sources or last_sources)(session_id, SOURCES_ID))
+
+        return {SOURCES_TOOL: (SOURCES_SCHEMA, run)}
+
+    async def _read_city(self, user_id: str) -> str:
+        """在"我的"里设的城市（§262 补）：只读库，不查天气；读不到为空。"""
+        if self._snapshot is not None:  # 考题注入了假数据：不去读真库
+            return ""
+        try:
+            from ironm_agent.weather import load_place
+
+            city, place = await load_place(user_id)
+            return (place.name if place is not None else "") or city
+        except Exception as e:
+            _log.warning("place unavailable: error_type=%s", type(e).__name__)
+            return ""
+
+    async def _read_labs(self, user_id: str) -> list[Lab]:
+        """每项化验最近一次（§255）；读不到时没有这一行，不影响作答。"""
+        try:
+            if self._labs is not None:
+                return await self._labs(user_id)
+            if self._snapshot is not None:  # 考题注入了假数据：不去读真库
+                return []
+            return await latest_labs(user_id)
+        except Exception as e:
+            _log.warning("labs unavailable: error_type=%s", type(e).__name__)
+            return []
+
+    async def _read_turns(self, session_id: str, text: str) -> list[Turn]:
+        if self._turns is not None:
+            return await self._turns(session_id, text)
+        if self._history is not None:  # 考题：按注入的几行排（读不到 mirobody）
+            return []
+        return await thread(session_id, text)
+
+    def _options_store(self) -> OptionStore:
+        if self._options is None:
+            self._options = default_options()
+        return self._options
+
+    async def _offer(self, user_id: str, session_id: str, run: dict[str, Any], text: str, answer: str) -> list[dict[str, Any]]:
+        """回答里给的几种吃法、替换动作存成带编号的推荐（§259），当场存好，编号给页面出按钮（§261）。存不了不影响回答。"""
+        raw_options = (run.get("_offered") or ((), ()))[0]
+        if not raw_options:
+            return []
+        try:
+            got = resolve(list(raw_options), f"{text}\n{answer}", datetime.now().astimezone(), session_id)
+            stored = await self._options_store().add(user_id, got) if got else []
+        except Exception as e:
+            _log.warning("options failed: error_type=%s", type(e).__name__)
+            return []
+        run["options"] = len(stored)
+        return [brief(o) for o in stored]
+
+    async def _keep_options(self, user_id: str, session_id: str, run: dict[str, Any], text: str, answer: str) -> None:
+        """回答里答应要跟进的事记成待跟进（§259）。存不了不影响回答。"""
+        raw_follow = (run.get("_offered") or ((), ()))[1]
+        try:
+            if raw_follow and not await self._memory_store().paused(user_id):
+                items = await self._memory_store().items(user_id)
+                if follow := promises(list(raw_follow), [answer], date.today(), items):
+                    await self._memory_store().apply(user_id, follow)
+        except Exception as e:
+            _log.warning("options failed: error_type=%s", type(e).__name__)
+
+    def _notes_store(self) -> NotesStore:
+        if self._notes is None:
+            self._notes = default_notes()
+        return self._notes
+
+    async def _conversation(self, user_id: str, session_id: str, turns: list[Turn],
+                            run: dict[str, Any]) -> Conversation:
+        """本会话内容（§254、§260）：篇幅内全用原文，放不下的换成要点和会话摘要，再放不下按重要性去掉；
+        最近两天的推荐（§259）。读不到哪样就少哪样，不影响作答。"""
+        recent = turns[-TURNS_MAX:]
+        options: tuple[str, ...] = ()
+        notes: dict[str, tuple[str, str]] = {}
+        summary = ""
+
+        async def read_options() -> tuple[str, ...]:
+            today = date.today()
+            return tuple(x.line(today) for x in await self._options_store().recent(user_id, today))
+
+        async def read_notes() -> dict[str, tuple[str, str]]:
+            ids = [t.turn for t in recent if t.turn]
+            return await self._notes_store().get(user_id, session_id, ids) if ids else {}
+
+        async def read_summary() -> str:
+            got = await self._summary_store().get(user_id, session_id)
+            return got.text if got is not None else ""
+
+        got = await asyncio.gather(read_options(), read_notes(), read_summary(), return_exceptions=True)
+        for name, value in zip(("options", "notes", "summary"), got, strict=True):
+            if isinstance(value, BaseException):
+                _log.warning("%s unavailable: error_type=%s", name, type(value).__name__)
+        options = got[0] if not isinstance(got[0], BaseException) else ()
+        notes = got[1] if not isinstance(got[1], BaseException) else {}
+        summary = got[2] if not isinstance(got[2], BaseException) else ""
+        conv, log = fit(turns, full={k: v[0] for k, v in notes.items()}, short={k: v[1] for k, v in notes.items()},
+                        summary=summary, options=options)  # fmt: skip
+        run["context"] = {**log, "options": len(conv.options),
+                          "chars": sum(len(t.said) + len(t.answer) for t in conv.turns)}  # fmt: skip
+        return conv
+
+    async def _keep_notes(self, user_id: str, session_id: str, turn: str, notes: str) -> None:
+        """这一轮查到和做了的存原文；太长的另写一份要点，放不下原文时用（§260）。都在回答后的后台做。"""
+        try:
+            short = ""
+            if len(notes) > SHORT_MIN:
+                llm = await self._quiet_llm(user_id)
+                short = await shorten(llm, notes) if llm is not None else ""  # 写不出就不存，不拿开头冒充要点（§267）
+            await self._notes_store().put(user_id, session_id, turn, notes, short)
+        except Exception as e:  # 留不下不影响已经发出的回答
+            _log.warning("turn notes failed: error_type=%s", type(e).__name__)
 
     async def _summarize(self, user_id: str, session_id: str, turns: int) -> None:
         """会话摘要（§73 需求 4、6）：3 句以上写第一次，之后每多 4 句更新；答应的事记成待跟进。日志只记条数。"""
@@ -1080,19 +1254,20 @@ class IronMAgent:
             self._kitchen = default_diet_store()
         return self._kitchen
 
-    async def _diet_plan_facts(self, user_id: str) -> tuple[dict[str, Any], str] | None:
-        """现在的饮食计划（§190）：工作日、周末一天合计（和饮食页同一份算法），最近从方案库套用的方案名；读不到时 None。"""
+    async def _diet_plan_facts(self, user_id: str) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+        """现在的饮食计划（§190）：工作日、周末一天合计（和饮食页同一份算法），最近从方案库套用的方案名，
+        和工作日、周末每顿吃什么（§257）；读不到时 None。"""
         from ironm_agent.web_diet import plan_days
         from ironm_agent.web_diet_library import applied_name
 
         try:
             kitchen = self._kitchen_store()
-            _, totals = await plan_days(kitchen, self._meals_store(), user_id)
+            sets, totals = await plan_days(kitchen, self._meals_store(), user_id)
             name = await applied_name(user_id, kitchen)
         except Exception as e:
             _log.warning("diet plan unavailable: error_type=%s", type(e).__name__)
             return None
-        return totals, name
+        return totals, name, sets
 
     async def _badges_line(self, user_id: str, snapshot: Snapshot) -> str:
         """档案里最近 7 天新拿到的勋章（§196）；读不到时为空。"""
@@ -1111,19 +1286,32 @@ class IronMAgent:
             _log.warning("badges unavailable: error_type=%s", type(e).__name__)
             return ""
 
-    async def _diet_plan_line(self, user_id: str) -> str:
-        """档案里饮食计划那一行（§190）；读不到时为空。"""
+    async def _diet_plan_line(self, user_id: str, today: date | None = None) -> str:
+        """档案里饮食计划那一行（§190）：一天合计，加上今天照计划每顿吃什么、哪几顿今天已经记了（§257）；读不到时为空。"""
         from ironm_agent.diet_library import SET_NAMES
+        from ironm_agent.recipes import set_of
 
         got = await self._diet_plan_facts(user_id)
         if got is None:
             return ""
-        totals, name = got
+        totals, name, sets = got
         if not any(v["kcal"] for v in totals.values()):
             return "还没排（首页\"今天吃什么\"没有照着排的）"
         days = "、".join(f"{SET_NAMES[s]}一天约 {v['kcal']} 千卡、蛋白质 {v['protein_g']} 克"
                          for s, v in totals.items() if v["kcal"])  # fmt: skip
-        return days + (f"；最近换上的是「{name}」" if name else "")
+        line = days + (f"；最近换上的是「{name}」" if name else "")
+        today = today or date.today()
+        slots = {k: v for k, v in (sets.get(set_of(today)) or {}).items() if v and not v.get("missing")}
+        if not slots:
+            return line
+        try:
+            eaten = {m.meal.kind for m in await self._meals_store().day(user_id, today) if m.deleted is None}
+        except Exception as e:
+            _log.warning("meals unavailable: error_type=%s", type(e).__name__)
+            eaten = set()
+        meals = "；".join(f"{k}{v['name']}约 {round(v['kcal'])} 千卡、蛋白质 {round(v['protein_g'])} 克"
+                          + ("（今天这顿已经记了）" if k in eaten else "") for k, v in slots.items())  # fmt: skip
+        return f"{line}。今天（{SET_NAMES[set_of(today)]}）照计划：{meals}"
 
     async def _diet_preview(
         self, user_id: str, args: Mapping[str, Any], ctx: Context, snapshot: Snapshot | None, today: date,
@@ -1141,6 +1329,8 @@ class IronMAgent:
             return no
         if kcal is None:
             kcal = _metric_value(snapshot, "kcal_target") if snapshot is not None else None
+        if snapshot is not None and (bad := _library_against_body(p, snapshot, today)):  # §269
+            return Outcome(False, f"「{p.name}」{bad}。换一份方案，或用 compose_diet_plan 按他的情况排一份。", "check")
         items = preview_lines(p, kcal)
         items.append(f"按每天约 {round(kcal)} 千卡的热量目标算份数" if kcal else "还算不出热量目标：按推荐份数")
         content = {"title": "换饮食方案", "headline": str(args.get("why") or "")[:60] or f"换成「{p.name}」",
@@ -1172,13 +1362,17 @@ class IronMAgent:
             _log.info("own recipes unavailable: error_type=%s", type(e).__name__)
             mine = []
         if not args.get("weekday"):
+            body, cap_p, cap = _body_diet(snapshot, today, None)
+            limits = "；".join([*body.values(), *([f"蛋白质一天约 {cap_p} 克、不超过 {cap} 克〔K127〕"] if cap else [])])
             return Outcome(True, "可选的食谱和减脂餐：\n" + menu(mine)
+                           + (f"\n按他的身体情况（系统会查）：{limits}。" if limits else "")
                            + "\n按他的情况挑好工作日（和周末）四顿，再调一次交上来。")  # fmt: skip
         if kcal is None:
             kcal = _metric_value(snapshot, "kcal_target")
         protein = _metric_value(snapshot, "protein_target")
         avoid = [str(x) for x in args.get("avoid") or () if str(x).strip()][:12]
-        got = compose(args, kcal, protein, mine, avoid)
+        body, protein, cap = _body_diet(snapshot, today, protein)  # 身体情况要避开的、蛋白质上限（§269）
+        got = compose(args, kcal, protein, mine, [*avoid, *body], body, cap)
         if not got.ok:
             return Outcome(False, "没过检查，还没出卡片：" + "；".join(got.problems) + "。改了再交一次。", "check")
         goal = f"按每天约 {round(kcal)} 千卡" + (f"、蛋白质约 {round(protein)} 克" if protein else "") + "的目标定了份数"
@@ -1324,9 +1518,82 @@ class IronMAgent:
             return False
         return True
 
-    async def _refresh_prefs(self, user_id: str) -> None:
+    async def _read_body(self, user_id: str, snapshot: Snapshot) -> None:
+        """身体情况（§265 需求 5）：化验、体检报告、用药变了才在后台读一遍，结论写进档案；出错不影响回答。"""
+        from ironm_agent.body_reading import BodyReading, default_body, fingerprint, read, recent_reports
+
+        if user_id in self._body_busy:
+            return
+        self._body_busy.add(user_id)
+        start = time.perf_counter()
+        try:
+            store = self._body or default_body()
+            r = snapshot.readings
+            reports = await (self._reports or recent_reports)(user_id, snapshot.today)
+            fp = fingerprint(r.labs, reports, r.meds)
+            old = await store.get(user_id)
+            if fp == (old.fingerprint if old is not None else ""):
+                return
+            if not fp:  # 化验、报告、用药都删了
+                await store.put(user_id, BodyReading("", fingerprint=""))
+                return
+            if (llm := await self._quiet_llm(user_id)) is None:  # 用他自己的模型，没填不读（§167）
+                return
+            got = await read(llm, labs=r.labs, reports=reports, meds=r.meds, about=_about(snapshot),
+                             context=await self._body_context(user_id, r.labs), search=self._medical_source(),
+                             today=snapshot.today)  # fmt: skip
+            if got is None:
+                return
+            reading, gaps = got
+            await store.put(user_id, reading)
+            await self._keep_gaps(user_id, gaps)
+            _log.info("body read: items=%d states=%d codes=%d refs=%d ms=%d", reading.text.count("\n- ") + bool(reading.text),
+                      len(reading.states), len(reading.codes), len(reading.refs), int((time.perf_counter() - start) * 1000))  # fmt: skip
+        except Exception as e:
+            _log.warning("body read failed: error_type=%s", type(e).__name__)
+        finally:
+            self._body_busy.discard(user_id)
+
+    async def _body_context(self, user_id: str, labs: Sequence[Any]) -> str:
+        """判断抽血条件用：每次抽血前 3 天内练了什么，记忆里说过的补剂。"""
+        days = sorted({x.day for x in labs if getattr(x, "day", None)})
+        lines: list[str] = []
+        if days:
+            try:
+                logs = [x.log for x in await self._training_store().workouts(user_id, days[0] - timedelta(days=3))]
+            except Exception as e:
+                _log.warning("body context workouts unavailable: error_type=%s", type(e).__name__)
+                logs = []
+            for d in days[-3:]:
+                near = [x for x in logs if x.done and 0 <= (d - x.day).days <= 3]
+                if near:
+                    what = "；".join(f"{x.day.isoformat()} {'、'.join(i.exercise for i in x.items[:4]) or x.session}" for x in near)
+                    lines.append(f"{d.isoformat()} 抽血前 3 天内练了：{what}")
+        try:
+            items = await self._memory_store().items(user_id)
+            took = [x.content for x in items if x.status == "active" and _SUPPLEMENT.search(x.content)]
+            if took:
+                lines.append("记忆里说过的补剂和药：" + "；".join(took[:6]))
+        except Exception as e:
+            _log.warning("body context memory unavailable: error_type=%s", type(e).__name__)
+        return "\n".join(lines)
+
+    async def _keep_gaps(self, user_id: str, gaps: Any) -> None:
+        """没覆盖到的记下来（§265 需求 8）。"""
+        from ironm_agent.body_gaps import default_gaps
+
+        try:
+            await (getattr(self, "_gaps", None) or default_gaps()).add(user_id, gaps)
+        except Exception as e:
+            _log.warning("body gaps not kept: error_type=%s", type(e).__name__)
+
+    async def _refresh_prefs(self, user_id: str, kcal: float | None = None) -> None:
+        """训练记录、饮食记录得出的习惯（§17、§261），每天一次，在后台。"""
+        from ironm_agent.memory_diet_prefs import refresh as refresh_diet
+
         try:
             await refresh_prefs(user_id, self._memory_store(), self._training_store())
+            await refresh_diet(user_id, self._memory_store(), self._meals_store(), kcal)
         except Exception as e:  # 出错不影响已经发出的回答
             _log.warning("prefs refresh failed: error_type=%s", type(e).__name__)
 
@@ -1368,10 +1635,30 @@ class IronMAgent:
         try:
             from mirobody.agent.knowledge import tools as medical
 
-            return medical.search if medical.scopes() else None
+            from ironm_agent.medical_terms import in_english
+
+            return in_english(medical.search) if medical.scopes() else None  # 只认英文：查之前把中文换成英文（§265）
         except Exception as e:
             _log.warning("medical knowledge unavailable: error_type=%s", type(e).__name__)
             return None
+
+    def _medical_for(self, user_id: str) -> Any | None:
+        """作答时查医学资料：查不到的词记下来（§265 需求 8，只记查询词）。"""
+        search = self._medical_source()
+        if search is None:
+            return None
+
+        async def run(query: str, scope: str = "") -> str:
+            got = await search(query, scope)
+            if str(got).startswith(("Nothing in", "这几个词没能换成英文")):
+                from ironm_agent.body_reading import Gaps
+
+                task = asyncio.create_task(self._keep_gaps(user_id, Gaps(not_found=(query[:80],))))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+            return got
+
+        return run
 
     def _timeline_tool(self, user_id: str, raw: Any, today: date) -> dict[str, Any]:
         """时间线（§97）：生病、伤病和近期的事、说疼、训练、管家的调整按日期排在一起，只读。"""
@@ -1392,7 +1679,8 @@ class IronMAgent:
 
         run = timeline.tool(today, illness=lambda s: self._illness_store().since(user_id, s),
                             memory=raw, pains=lambda s: self._pain_store().since(user_id, s),
-                            workouts=workouts, changes=changes, plans=plans)  # fmt: skip
+                            workouts=workouts, changes=changes, plans=plans,
+                            meals=lambda s: self._meals_store().since(user_id, s))  # fmt: skip
         return {timeline.SCHEMA["function"]["name"]: (timeline.SCHEMA, run)}
 
     def _weather_tool(self, user_id: str) -> dict[str, Any]:
@@ -1490,6 +1778,10 @@ class IronMAgent:
                 self._later(user_id, self._settle_state(user_id, text, run, history))
                 if extracting:
                     self._later(user_id, self._remember(user_id, text, said["answer"], self._memory_context(history)))
+            if "answer" in said and run.get("turn") and (kept := notes_text(run.get("_said") or [])):
+                self._later(user_id, self._keep_notes(user_id, session_id, run["turn"], kept))
+            if "answer" in said and run.get("_offered") and any(run["_offered"]):
+                self._later(user_id, self._keep_options(user_id, session_id, run, text, str(said["answer"])))
             if "answer" in said and self._remember_on:
                 if said.get("remembered"):  # 单 Agent 这一轮已经当场记了（§68）
                     run["memory_extract"] = "agent"
@@ -1499,7 +1791,11 @@ class IronMAgent:
                 turns = sum(1 for x in said["history"] if x.startswith(USER)) + 1
                 self._later(user_id, self._summarize(user_id, session_id, turns))
                 if prefs_due(user_id):  # 每天第一次回答之后，后台更新训练记录得出的偏好
-                    self._later(user_id, self._refresh_prefs(user_id))
+                    self._later(user_id, self._refresh_prefs(user_id, run.get("_kcal_target")))
+                if (snap_now := run.pop("_body_snap", None)) is not None:  # 化验、报告、用药变了才读（§265），不让下一轮等它
+                    task = asyncio.create_task(self._read_body(user_id, snap_now))
+                    self._tasks.add(task)
+                    task.add_done_callback(self._tasks.discard)
         except Exception as e:  # 不把异常原文给用户
             _log.error("turn failed: error_type=%s", type(e).__name__)
             run["error_type"] = type(e).__name__
@@ -1606,10 +1902,10 @@ class IronMAgent:
             return
 
         # 2. 读本会话前几轮与这个人的记忆（全部有效记忆，不靠检索）；同时开始读他的数据（档案、健康数据、
-        #    指标），与路由并行（spec [2026-10-23] §7）
+        #    指标）
         await self._sync(user_id, run)  # 先等上一轮的档案和记忆写完再读（spec [2026-10-23] §51）
         read = time.perf_counter()
-        history, recall, ill, day = await asyncio.gather(
+        history, recall, ill, day, turns = await asyncio.gather(
             (self._history or partial(recent, keep=KEEP_WHOLE))(
                 session_id, text
             ),  # 确认条件、卡片说明完整保留（§68）
@@ -1617,10 +1913,16 @@ class IronMAgent:
             # 生病记录、今日状态作答前只读（§114）：他这句说了什么由管家判断，作答后再写；管家失败才按关键词
             recent_illness(self._illness_store(), user_id, date.today()),
             self._read_day(user_id, run),
+            self._read_turns(session_id, text),
         )
+        if not turns and self._history is not None and self._turns is None:  # 考题注入的是几行
+            turns = turns_from_lines(history)
+        run["_turns"] = turns
+        # 交给作答模型的本会话上下文（§254）：和下面读数据同时准备
+        run["_conv"] = asyncio.create_task(self._conversation(user_id, session_id, turns, run))
         run["_day"] = day
         if not active_illness(ill, date.today()):
-            # 没有正在进行的生病：跟生病有关的近期事件和建议不再交给角色（spec [2026-10-23] §46）
+            # 没有正在进行的生病：跟生病有关的近期事件和建议不再交给作答的模型（spec [2026-10-23] §46）
             recall = recall.without(
                 lambda x: x.category in ("event", "advice") and mentions(x.content)
             )
@@ -1637,7 +1939,6 @@ class IronMAgent:
         reacting.add_done_callback(self._tasks.discard)
         snap = asyncio.create_task(self._read_snapshot(user_id))
         train = asyncio.create_task(self._read_training(user_id, date.today()))
-        wx = asyncio.create_task(self._read_weather(user_id))
         basics = asyncio.create_task(personal_basics(self._health_source(), user_id, session_id))
         files = await read_attachments(user_id, file_list, **self._files)
         if file_list:
@@ -1658,11 +1959,10 @@ class IronMAgent:
                 train,
                 basics,
                 files,
-                wx,
             ):
                 yield block
         finally:
-            for task in (snap, train, basics, wx):
+            for task in (snap, train, basics):
                 task.cancel()
 
     async def _single_turn(
@@ -1680,15 +1980,23 @@ class IronMAgent:
         train: asyncio.Task[tuple[Plan | None, list[WorkoutLog], date | None]],
         basics: asyncio.Task[Personal],
         files: Attachments,
-        wx: asyncio.Task[Weather | None] | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """单 Agent 一轮（spec [2026-10-23] §67）：不路由、不整合；Skill 跨领域按需装、工具按需调；
         改计划、排新计划、记训练由它在回答里给出，系统执行。数据风险、拒答由规则判定，话由它说，
         代码查必须说到的几点，没说到才退回固定回答（§86）。"""
-        prep = await self._prepare(user_id, recall, text, history, snap, train, wx, run)
+        prep = await self._prepare(user_id, recall, text, history, snap, train, run)
         snapshot, plan, case = prep.snapshot, prep.plan, prep.case
+        # 这一轮上传的报告是他提供的原文：登记成可引用的来源，回答引用报告里的数不当成"没出处"删掉（§265）
+        report_ids: dict[str, str] = {}
+        for x in files.reports:
+            if x.text:
+                cid = f"C{max((int(k[1:]) for k in case.calcs if k[1:].isdigit()), default=0) + 1}"
+                case.calcs[cid] = f"他这一轮上传的报告《{x.name}》（他提供的原文）：{x.text}"
+                report_ids[x.name] = cid
+        run["_body_snap"] = snapshot  # 回答后在后台看要不要重读身体情况（§265）
+        run["_kcal_target"] = next((m.value for m in snapshot.metrics if m.key == "kcal_target"), None)  # 饮食习惯用（§261）
         _, logs, _ = await train
-        run.update(intent="pro", route_by="single", roles=[Role.GENERAL.value],
+        run.update(roles=[Role.GENERAL.value],
                    sick=case.readiness.sick, risks=[x.key for x in case.risks])  # fmt: skip
         run["snapshot_failed"] = snapshot.failed
         run["_missing"] = missing_readings(snapshot.readings)
@@ -1699,8 +2007,6 @@ class IronMAgent:
             "\n\n".join(x for x in (prefix, blocked.note, RISK_BLOCK) if x) if blocked else ""
         )
         refusal_fixed, prefix = prefix, ""  # 拒答交给模型说，没提医生时再补（§86 需求 3）
-        # 按意图选规程（§75）：和下面读条件、目标、指标同时进行
-        routing = asyncio.create_task(route_skills(llm, text, history[-2:]))
 
         # 上下文：待确认的预览、今天的训练、排新计划要用的五项条件（旧答案带来源和日期）
         coach_lines = [x for x in history if not x.startswith(USER)]
@@ -1718,96 +2024,49 @@ class IronMAgent:
         kinds = [k for k in REFUSAL_KINDS if k in (run.get("refusals") or [])]
         refused = "；".join(_replies().refusals[k] for k in kinds)
         seen = await (self._earlier or earlier)(session_id)
-        risk_notes = [x.note for x in case.risks if x.note not in seen and x is not blocked]
+        alarm = next((x for x in case.risks if x.key in MUST_SAY), None)  # 化验、报告里危险的：不管问什么说一次（§265）
+        alarm_said = alarm is not None and said_alarm(alarm.key, coach_lines)
+        risk_notes = [x.note for x in case.risks if x.note not in seen and x is not blocked and x is not alarm]
         ask_ill = await self._illness_followup(user_id, run)
-        # 模型先判断、关键词兜底（§114）：下面几样先看路由（模型）的结果，路由出错才按关键词
-        waited = time.perf_counter()
-        try:
-            routed = await routing
-        except Exception as e:  # 路由出错：退回按关键词
-            _log.warning("skill route failed: error_type=%s", type(e).__name__)
-            routed = None
-        run["route_wait_ms"] = int((time.perf_counter() - waited) * 1000)  # 等选规程等了多久（§165）
-        run["judged_by"] = "model" if routed is not None else "keyword"
-        if routed is not None:  # 涉及训练：路由说的领域或选的规程里有训练
-            training_ask = Role.TRAINER in routed.domains or any(
-                x.role == Role.TRAINER for x in routed.skills
-            )
-        else:
-            training_ask = asks_training(text) or bool(PLAN_REQUEST.search(text))
-        # §5：危急指标又问训练时这一轮不给训练安排；话由模型说（§86）
-        must_block = blocked is not None and (training_ask or asked(history) is not None)
-        if (
-            routed.sources if routed is not None else is_provenance(text)
-        ):  # 追问上一条回答的来源（§86）
-            sources = await (self._sources or last_sources)(session_id, SOURCES_ID)
-            run["_provenance"] = provenance_note(sources)
-        busy = (
-            ""
-            if routed is not None
-            else "、".join(  # 这几天没空：模型看原话判断
-                weekday_name(d) for d in sorted(blocked_days(text))
-            )
-        )
-        if routed is None or any(x.id == "data-read" for x in routed.skills):  # 点名的指标先查好
-            checked, checked_note = await self._check_named(
-                user_id, session_id, text, [Role.GENERAL], run
-            )
-        else:
-            checked, checked_note = None, ""
+        # 有危急情况：每轮都告诉作答的模型；问到训练先说清楚、不给训练安排，问吃睡照常答（§42）；
+        # 回答里出现训练安排就换成固定的话（§255 需求 3，§5、§86）。追问来源、这几天没空、点名的指标
+        # 由作答的模型自己看、自己查（取来源用工具）
+        must_block = blocked is not None
         note = "\n".join(x for x in (
             "现在的情况：\n" + "\n".join(follow) if follow else "",
             "排新计划要用的条件（旧答案带来源和日期）：\n" + "\n".join(terms),
             CONFIRMED_NOTE + (f"他的目标：{aim}。要写计划时，说明里写这份计划怎么为这个目标排，目标的数和日期照写；他这句还问了别的，先答问的（§182）。" if aim else "")
             if confirmed_now else "",
             PREVIEWED_NOTE if previewed_now else "",
-            f"他这句话说这些天没空：{busy}。挪训练不要挪到这些天。" if busy else "",
-            files.note_for_experts(), video_note(text), checked_note,  # 训练视频分析（§224）
+            files.note_for_experts(report_ids), video_note(text),  # 训练视频分析（§224）
             special_rules(special_flags(snapshot.profile, case.risks, snapshot.today)),
             f"他问的里面有你不能做的（诊断、开药改药、治疗方案、替他叫急救）。开头用一句自己的话说明这部分不能做、"
             f"该找谁，意思是：{refused} 再说能帮他做的部分。" if refused else "",
-            run.get("_provenance", ""),
-            f"数据里有危急情况：{blocked.note} 这一轮不给任何训练安排、不出计划、不写组数次数："
-            "先把这件事跟他说清楚（先别运动、尽快就医、出现哪些情况马上打 120），再回答他问的里面和训练无关的部分。"
-            if must_block and blocked else "",
+            f"数据里有危急情况：{blocked.note} 这一轮不给任何训练安排、不出计划、不写组数次数。"
+            "他问到训练（练什么、能不能练、怎么练、计划）时，先把这件事跟他说清楚（先别运动、尽快就医、出现哪些情况马上打 120），"
+            "再回答他问的里面和训练无关的部分；问的是吃、睡这些和训练无关的，照常答，不用提这件事（首页已经提醒）。"
+            if must_block and blocked and blocked is not alarm else "",
+            f"化验或体检里有要让他马上知道的：{alarm.note} 不管他问的是什么，这一轮先用一句自己的话把这件事说清"
+            "（去看哪个科；先别运动，或加大强度前先问医生），再答他问的"
+            + ("；这一轮不给任何训练安排、不出计划、不写组数次数。" if alarm.block else "。")
+            if alarm is not None and not alarm_said else
+            f"化验里有危急情况（本次对话已经跟他说过）：{alarm.note} 这一轮不给任何训练安排、不出计划、不写组数次数。"
+            if alarm is not None and alarm.block else "",
             "回答涉及训练时要顺带提醒到（本会话说过的不用重复）：\n" + "\n".join(risk_notes)
             if risk_notes else "",
             f"今天还没问过他：{ask_ill} 回答末尾自然地问一句。" if ask_ill else "",
         ) if x)  # fmt: skip
 
-        # Skill：跨领域先装 1–3 份，不够时由它自己再装。路由给了结果就只装它选的（加新用户、附图，
-        # 这两样不是关键词）；关键词说的化验、动作、改计划、记训练只在路由出错时用（§114）
-        records = record_kinds(text) if routed is None else set()
-        asks_data = bool(records) and not _HURT.search(text)
-        job_hint = task_of(text) if routed is None else None
-        # 有伤病记忆、今天状态差不再强装伤痛处理、今天练不练（§111）：这两种情况写在各工作流的步骤里，
-        # 档案照旧带着；路由按他问的选。规程上的 injury 标记留着，问数据时去掉误选的伤痛规程（§37）；
-        # 今天练不练不再按"状态差"自动装（§182 不定级），管家看档案里的数自己装
+        # 规程（§255、§263，渐进式披露）：附了照片、新用户、传了病历化验单先装对应的（看情况，不看说法）；
+        # 其余（包括训练、饮食、恢复三份基础规程）由作答的模型看目录自己装
         triggers = {name for name, on in (
-            ("plan", job_hint == "plan"), ("log", job_hint == "log"),
-            ("image", bool(files.images)), ("move", bool(named_in(text))),
-            ("new", plan is None and not logs and all(x.evidence == FORM for x in recall.items)),  # 新用户：一定装初次评估（§76）；建档、档案表单写的不算（§244 需求 6）
-            *((k, True) for k in records),
+            ("image", bool(files.images)),
+            ("report", bool(files.reports)),  # 传病历就装临床规程（§270 需求 4）
+            # 新用户：一定装初次评估（§76）；建档、档案表单写的不算（§244 需求 6）；传了病历的这一轮先看病历（§270）
+            ("new", not files.reports and plan is None and not logs and all(x.evidence == FORM for x in recall.items)),
         ) if on}  # fmt: skip
-        drop = {"injury"} if asks_data else set()
-        if routed is not None:
-            if routed.fit == "outside":  # 和健身无关的事（写周报）：新用户也不拉去评估
-                triggers.discard("new")
-            # 模型判断是打招呼、道谢、闲聊：不装规程（情况要求的也不装），也不给档案（§98）；
-            # 附了图片、新用户例外（照片要估算，新用户要开始初次评估）
-            chatting = routed.fit == "chat" and not triggers & {"image", "new"}
-            loaded = (
-                [] if chatting else pick_routed(routed.skills, routed.domains, text, triggers, drop)
-            )
-            run.update(skills_by="route", skill_intent=routed.intent, skill_fit=routed.fit)
-            if routed.dropped:
-                run["skills_dropped"] = routed.dropped
-        else:  # 退回按关键词（都对不上时不按语义硬装，由 Agent 看目录自己装，§67）
-            chatting = False
-            # 路由看得到上一轮、关键词看不到：上一轮问过确认时补上排训练计划（§108 只在这里保留）
-            loaded = pick_any(text, triggers | ({"plan"} if confirmed_now else set()), drop=drop)
-            run["skills_by"] = "rule"
-        run["skills"] = {Role.GENERAL.value: [x.id for x in loaded]}
+        loaded = situational(triggers)
+        run["skills"] = {Role.GENERAL.value: [x.id for x in loaded]}  # 作答中自己装的也记进来（toolbox.loaded）
         tools_ctx = self._tool_context(user_id, snapshot, case, recall, run.get("_found"))
         # 四层记忆（§73）：画像、情景、该问的、最近别的会话的摘要；查记忆工具查全部记忆
         raw = await self._memory_items(user_id)
@@ -1841,14 +2100,13 @@ class IronMAgent:
         toolbox = Toolbox(
             GENERAL, kb=self._kb, health=self._health_source(), user_id=user_id,
             session_id=session_id, calcs=case.calcs, context=tools_ctx,
-            meds=self._meds_source(), medical=self._medical_source(),
+            meds=self._meds_source(), medical=self._medical_for(user_id),
             extra={**EXTRA_TOOLS, RECALL: (RECALL_SCHEMA, recall_tool(raw, snapshot.today, load=everything)),
                    READ_CHAT: (READ_CHAT_SCHEMA, chat_tool(session_id, text)),  # 翻本会话原文（§207）
                    **self._web_tools(snapshot.today), **self._timeline_tool(user_id, everything, snapshot.today),
-                   **self._weather_tool(user_id)},
+                   **self._weather_tool(user_id), **self._sources_tool(session_id),
+                   **self._meal_history_tool(user_id, snapshot)},
         )  # fmt: skip
-        if checked is not None:
-            toolbox.evidence.absorb(checked)
         personal = await basics
         run["basics"] = len(personal.lines)
         known = lay.handles
@@ -1859,30 +2117,28 @@ class IronMAgent:
             COACH_NAME,
             "理解问题、查资料和数据、作答" + (f"（规程：{using}）" if using else ""),
         )
-        # 这一轮涉及训练才把计划和记录的写法放进系统提示（§96）
-        # 路由给了结果按装上的规程（只问动作不用）；路由出错才按关键词（§114）
+        # 这一轮涉及训练才把计划和记录的写法放进系统提示（§96）：先装了训练类内容规程、刚列了确认单或出了预览；
+        # 作答中途装上训练类规程时再补（基础规程不算）
         on_training = (any(x.role == Role.TRAINER and x.id != "move-coach" for x in loaded)
-                       or confirmed_now or previewed_now
-                       or (routed is None and (job_hint is not None or training_ask)))  # fmt: skip
+                       or confirmed_now or previewed_now)  # fmt: skip
         run["actions_prompt"] = on_training
-        run["chat_light"] = chatting  # §98：闲聊只给记忆和历史
-        # 改计划、新计划、记训练是跟着规程装的工具（§120）；刚列了确认清单、他在回应（路由看了上一轮、
-        # 选了排训练计划；路由不可用时看说法）却没交计划时，同一轮提醒它一次（§108：他问别的不提醒）
-        replying = (any(x.id == "plan-build" for x in routed.skills) if routed is not None
-                    else replies(text))  # fmt: skip
+        # 改计划、新计划、记训练是跟着规程装的工具（§120）；刚列了确认清单却没交计划时，同一轮提醒它一次，
+        # 他换了话题就照他的话题答（提醒里写着，§255 需求 3）
         ctx = Context.of(case)
         desk = Desk(
             self._action_handlers(user_id, text, plan, ctx, snapshot.today, run, tools_ctx,
                                   confirmed=confirmed, merge=bool(history), blocked=blocked is not None,
                                   snapshot=snapshot, known=known, remembering=remembering,
                                   history=history),
-            has_plan=plan is not None, must_plan=confirmed_now and replying and blocked is None,
+            has_plan=plan is not None, must_plan=confirmed_now and blocked is None,
         )  # fmt: skip
         if remembering:  # "记下了"算不算做了：回答写完后核对，通过的长期记忆才算（复核 11-03）
             desk.memory_ok = lambda answer: _memory_holds(
                 desk.memory, known, text, answer, snapshot.today
             )
         toolbox.actions = desk
+        toolbox.loaded = run["skills"][Role.GENERAL.value]  # 同一份：作答中装上的接着记
+        run["_said"] = toolbox.said  # 这一轮查到和做了的，答完留给后面几轮（§254）
         run["_desk"] = desk  # 这一轮出了异常时作废它存下的预览（generate_response 里）
         if "_t0" in run:  # 作答前的准备（读数据、选规程……）用了多少毫秒（§165）
             run["pre_ms"] = int((time.perf_counter() - run["_t0"]) * 1000)
@@ -1890,10 +2146,11 @@ class IronMAgent:
         toolbox.progress = lambda *e: steps.put_nowait(e)  # 每开始、做完一步告诉页面（§165）
         answering = asyncio.create_task(respond(
             text, history, concerns_of(text), toolbox, llm, personal, recall, case=case, skills=loaded,
-            note="" if chatting else note, with_case=not chatting,
+            note=note,
             has_plan=plan is not None, confirmed=confirmed, just_asked=confirmed_now,
             today=snapshot.today, training=on_training, record_after=self._record_after,
             images=[x.part() for x in files.images], known=known, memory_block=memory_block,
+            conversation=await run["_conv"] if "_conv" in run else None,
         ))  # fmt: skip
         try:
             async for block in _steps_until(answering, steps):
@@ -1902,6 +2159,9 @@ class IronMAgent:
             if not answering.done():  # 他断开了：这一轮不再往下答
                 answering.cancel()
         c = answering.result()
+        run["_offered"] = (c.opinion.options, c.opinion.follow_up)  # §259：回答后存成推荐、待跟进
+        if c.opinion.check:  # §270：健康判断的核对只进轨迹（_ 开头不进日志），日志只记有没有
+            run["_check"], run["checked"] = c.opinion.check, True
         yield finished("agent", consultation_summary(c), ok=c.status != "failed")
         run["_judged_state"] = c.status != "failed"  # 作答了：没调 record_state 就是没说（§122）
         run["_said_state"] = dict(desk.said)
@@ -1978,8 +2238,12 @@ class IronMAgent:
         composed = await revise(c, text, llm, constraints=rules, memory=recall, annotate=mark)
         run.update(constraints=list(composed.violations), constraint_fixed=composed.fixed)
         run["_compose"] = {"checks": list(composed.checks), "repaired": composed.repaired}
-        if must_block:  # 危急指标：查它说到了先别运动、尽快就医，没给训练安排（§86 需求 2）
+        if must_block:  # 危急指标：回答里不能有训练安排；说到训练时要有先别运动、尽快就医（§86 需求 2、§255）
             lack = missing(composed.text, RISK_NEEDS)
+            warn = {"stop", "doctor"}
+            half = bool(warn - set(lack)) and bool(warn & set(lack))  # 说到了这件事却没说全
+            # 明显在问训练（只用来兜底核对）却没说到：照旧换成固定的话；问吃睡没提这件事：照常（§42）
+            lack = lack if NO_TRAINING in lack or half or asks_training(text) else []
             run["risk_by"] = "fixed" if lack else "model"
             if lack:
                 await self._drop_drafts(user_id, desk.drafts)
@@ -1994,6 +2258,9 @@ class IronMAgent:
         elif refused:
             run["refusal_by"] = "model"
         prefix = "\n\n".join(x for x in (prefix, files.note_for_user()) if x)
+        if alarm is not None and not alarm_said and not _TOLD_DOCTOR.search(composed.text):  # 没说到：开头补上（§265 需求 3）
+            run["alarm_by"] = "fixed"
+            prefix = "\n\n".join(x for x in (alarm.note, prefix) if x)
         cards = desk.cards  # 动作工具出的预览（§120）：计划在前，训练记录在后
         if desk.plan is None and run.get("_plan_note"):  # 特殊人群拦下、最后没出计划预览（§95）
             composed = replace(composed, text=run["_plan_note"])
@@ -2005,36 +2272,23 @@ class IronMAgent:
                 x for x in (extra, *(CONFIRM_NOTE[k] for k in desk.kinds)) if x
             )
             composed = replace(composed, text=composed.text.rstrip() + "\n\n" + extra_note)
+        if files.received():  # 收到文件的那句放最后（§271）：第一句留给结论
+            composed = replace(composed, text=composed.text.rstrip() + "\n\n" + files.received())
+        # 直接记下的（一餐、读数）：那一句由系统按实际结果写，模型自己写的"记上了"去掉（§259 需求 3）
+        receipts = [str(x.extra.get("receipt") or x.note) for x in desk.saved if x.ok and (x.extra.get("receipt") or x.note)]
+        if receipts:
+            composed = replace(composed, text=drop_log_claims(composed.text))
+            prefix = "\n\n".join(x for x in (prefix, *receipts) if x)
+            run["receipts"] = len(receipts)
         blocks = self._answer(composed, prefix, run, said)
+        offered = await self._offer(user_id, session_id, run, text, composed.text)
+        if offered:  # 推荐下面的"记这顿""换这个"（§261）：存成编号后跟在回答后面发给页面
+            blocks.insert(1, {"type": "tool_call", "id": "options", "name": "", "args": {"options": offered}})
         tail = 2 if blocks[-1].get("tool_call_id") == SOURCES_ID else 0
         for block in [*blocks[: len(blocks) - tail], *cards, *blocks[len(blocks) - tail :]]:
             yield block
         run.pop("_desk", None)  # 卡片发出去了：后面再出什么事也不作废它们
         await self._drop_drafts(user_id, desk.replaced)  # 新的那张给他看了：上一轮那张作废
-
-    async def _check_named(
-        self, user_id: str, session_id: str, text: str, roles: Sequence[Role], run: dict[str, Any]
-    ) -> tuple[Evidence | None, str]:
-        """问题里点到具体指标时，作答前由规则先查这个人的这几项数据（spec [2026-10-23] §37）。
-        运行记录里只记查了几项、查到几行，不记指标名。"""
-        named = named_indicators(text)
-        holder = next((spec_of(r) for r in roles if spec_of(r).health_data), None)
-        if not named or holder is None:
-            return None, ""
-        pre = Toolbox(
-            holder,
-            kb=self._kb,
-            health=self._health_source(),
-            user_id=user_id,
-            session_id=session_id,
-        )
-        try:
-            found, rows, ok = await pre.prefetch_health(named)
-        except Exception as e:  # 查不了不影响作答
-            _log.warning("prefetch health failed: error_type=%s", type(e).__name__)
-            found, rows, ok = "", 0, False
-        run["prefetch"] = {"asked": len(named), "rows": rows, "ok": ok}
-        return pre.evidence, checked_note(named, found, rows, ok)
 
     async def _context_for_follow(
         self,
@@ -2043,7 +2297,7 @@ class IronMAgent:
         train: asyncio.Task[tuple[Plan | None, list[WorkoutLog], date | None]],
         run: dict[str, Any],
     ) -> list[str]:
-        """路由没把握时管家看的上下文（spec [2026-10-23] §56）：待确认的计划预览、今天的训练状态、计划目标。"""
+        """作答时带上的跟进上下文（spec [2026-10-23] §56）：待确认的计划预览、今天的训练状态、计划目标。"""
         out: list[str] = []
         try:
             draft = await self._training_store().pending_plan(user_id, skip_source="checkup")
@@ -2258,7 +2512,7 @@ class IronMAgent:
                            note=f"记下了{when}{KINDS[kind].title} {value:g} {k.shown}")  # fmt: skip
 
         async def log_meal(desk: Desk, args: Mapping[str, Any]) -> Outcome:
-            from ironm_agent.meals import Macros, food_line, meal_from, totals
+            from ironm_agent.meals import Macros, food_line, meal_from, record
 
             kind = str(args.get("kind") or "")
             if kind not in MEAL_KINDS:
@@ -2269,9 +2523,35 @@ class IronMAgent:
             if len(foods) > MAX_FOODS:
                 return Outcome(False, f"一餐最多记 {MAX_FOODS} 样，合并一下再交。", "format")
             lines, missed, bad, by_portion = [], [], [], []
+            # 吃的是最近推荐里的：按编号取推荐时存下的内容和数（§259），和推荐时一致
+            picked = list(dict.fromkeys(str(x).strip().upper() for x in args.get("options") or [] if str(x).strip()))
+            offered: list[Any] = []
+            if picked:
+                have = {o.id: o for o in await self._options_store().recent(user_id, today) if o.kind == "meal"}
+                unknown = [i for i in picked if i not in have]
+                if unknown:
+                    return Outcome(False, f"最近两天的推荐里没有{'、'.join(unknown)}：照列出来的编号写；"
+                                   "对不上他说的是哪几个，就问他一句。", "format")  # fmt: skip
+                again = [i for i in picked if have[i].chosen]  # 别把同一顿记两遍（§264）
+                if again:
+                    return Outcome(False, f"{'、'.join(again)}已经记过了。先问他一句是不是又吃了一份；"
+                                   "他说是，再按食物列 foods 记，不写这个编号。", "check")  # fmt: skip
+                offered = [have[i] for i in picked]
+                got_lines, got_missed = option_lines(offered)
+                lines += got_lines
+                missed += got_missed
+            if not foods and not picked:
+                return Outcome(False, "没写吃了什么：写 foods，或者写推荐编号 options。", "format")
+            said = " ".join([str(args.get("name") or ""), *(str(f.get("name") or "") for f in foods)])
             for f in foods:
                 name, grams = str(f.get("name") or "").strip()[:30], f.get("grams")
                 n = f.get("portions")
+                chain = branded(name, said)  # 说到了连锁店：按这家店的菜单、官方一份记（§256）
+                if chain is not None:
+                    # 按份记：写了几份按几份，没写算一份（模型估的克数不准，11-23 一杯玉米按 150 克算成了两份）
+                    count = float(n) if isinstance(n, int | float) and 0 < float(n) <= 10 else 1.0
+                    lines.append(food_line(chain.name, count * chain.unit_g, food_id=chain.id))
+                    continue
                 if not isinstance(grams, int | float) and isinstance(n, int | float) and 0 < float(n) <= 10:
                     from ironm_agent.foods import find as find_food
 
@@ -2303,15 +2583,13 @@ class IronMAgent:
                 why = "；".join(x for x in (f"库里没有{'、'.join(missed)}，又没给每 100 克的估值" if missed else "",
                                          f"写得不对：{'、'.join(bad)}" if bad else "") if x) or "没写吃了什么、多少克"  # fmt: skip
                 return Outcome(False, f"没记：{why}。补上再交。", "format")
-            title = str(args.get("name") or "").strip() or "、".join(x.name for x in lines)
+            title = (str(args.get("name") or "").strip() or "、".join(o.label for o in offered)
+                     or "、".join(x.name for x in lines))  # fmt: skip
             meal = meal_from(kind, title, lines, estimated=True, note="对话里记的，按食物库算")  # type: ignore[arg-type]
-            store = self._meals_store()
-            row = await store.add(user_id, today, meal)
-            for old in await store.day(user_id, today):  # 每种餐每天只留一份（§43，同饮食页）
-                if old.id != row.id and old.meal.kind == meal.kind:
-                    await store.delete(user_id, old.id)
-            day_total = totals(await store.day(user_id, today)).kcal
+            _, day_total = await record(self._meals_store(), user_id, today, meal)  # 同一种餐可以记多条（§264）
             self._later(user_id, self._coach(user_id, "记饮食", True))
+            if picked:
+                await self._options_store().choose(user_id, picked)
             target = goal["kcal"]
             left = (
                 f"，目标约 {round(target)}，还能吃约 {max(0, round(target - day_total))} 千卡"
@@ -2322,9 +2600,12 @@ class IronMAgent:
                                             f"{'、'.join(bad)}没记" if bad else "") if x)  # fmt: skip
             portions = f"（{'、'.join(by_portion)}）" if by_portion else ""
             return Outcome(True, f"已记下{kind}：{meal.name}{portions}，约 {round(meal.macros.kcal)} 千卡、蛋白质 "
-                           f"{round(meal.macros.protein_g)} 克（今天的{kind}只留这一份）；今天一共约 "
+                           f"{round(meal.macros.protein_g)} 克；今天一共约 "
                            f"{round(day_total)} 千卡{left}{'；' + skipped + '，没算进去' if skipped else ''}"
                            "（饮食页能改份量、删掉）。", kind="saved", what="meal",
+                           extra={"receipt": f"已记下{kind}：{'、'.join(x.name for x in lines)}，约 {round(meal.macros.kcal)} 千卡、"
+                                             f"蛋白质 {round(meal.macros.protein_g)} 克；今天一共约 {round(day_total)} 千卡"
+                                             + (f"，还能吃约 {max(0, round(target - day_total))} 千卡" if target else "") + "。"},
                            note=f"记下了{kind}：{meal.name}（约 {round(meal.macros.kcal)} 千卡）",
                            calc=f"{kind}{meal.name}按食物库算约 {round(meal.macros.kcal)} 千卡、蛋白质 "
                                 f"{round(meal.macros.protein_g)} 克；今天一共约 {round(day_total)} 千卡{left}")  # fmt: skip
@@ -2524,7 +2805,7 @@ class IronMAgent:
                 return out
             from ironm_agent.diet_library import SET_NAMES
 
-            totals, _ = facts
+            totals = facts[0]
             now = "、".join(f"{SET_NAMES[s]}约 {v['kcal']} 千卡" for s, v in totals.items() if v["kcal"]) or "还没排"
             desk.unlock([DIET_PLAN, COMPOSE_DIET])
             hint = (f"他现在的饮食计划一天{now}" + (f"，新目标每天约 {new_kcal} 千卡" if new_kcal else "")
@@ -2802,10 +3083,10 @@ class IronMAgent:
         history: list[str],
         snap: asyncio.Task[Snapshot],
         train: asyncio.Task[tuple[Plan | None, list[WorkoutLog], date | None]],
-        wx: asyncio.Task[Weather | None] | None = None,
         run: dict[str, Any] | None = None,
     ) -> Prepared:
-        """共享档案与要不要追问（都是规则，不调用模型）。数据、计划和天气在这一轮开始时就同时在读了。"""
+        """共享档案与要不要追问（都是规则，不调用模型）。数据、计划在这一轮开始时就同时在读了；
+        天气不在这里，问到时作答的模型自己查（§262）。"""
         snapshot, (plan, logs, since) = await snap, await train
         ill: list[Episode] = list((run or {}).get("_ill") or [])
         lines = case_lines(plan, logs, snapshot.today, since)
@@ -2835,14 +3116,11 @@ class IronMAgent:
             + await self._trial_lines(user_id, plan, logs, snapshot, body),
             illness=state, day=today_lines,
             insights=insight_lines, target=target, sore=sore_parts,
-            meals=await self._meals_line(user_id, snapshot), diet_plan=await self._diet_plan_line(user_id),
+            meals=await self._meals_line(user_id, snapshot), diet_plan=await self._diet_plan_line(user_id, snapshot.today),
             badges=await self._badges_line(user_id, snapshot),
+            labs=labs_line(list(snapshot.readings.labs) or await self._read_labs(user_id), snapshot.today),  # 快照里读过就不再读（§265）
+            city=await self._read_city(user_id),
         )  # fmt: skip
-        current = await wx if wx is not None else None
-        if current is not None:
-            case = replace(case, weather=_weather_case(current, plan, snapshot.today))
-        if run is not None:
-            run["weather"] = current is not None
         return Prepared(snapshot, plan, case)
 
     def _answer(

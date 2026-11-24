@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from typing import Any, Literal
 
@@ -24,6 +24,7 @@ REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"  # 定位后认城�
 AGENT = "iron-m-weather/1.0"  # OpenStreetMap 要求写明是哪个应用在查
 TIMEOUT_S = 6.0
 CACHE_S = 600  # 同一个地方 10 分钟内不重复取
+STALE_S = 3 * 3600  # 天气服务一时连不上：3 小时内取到过的先用着，写明是几点的（§262 补）
 
 type Level = Literal["good", "caution", "indoor", "avoid"]
 LEVEL_NAMES: dict[str, str] = {
@@ -134,6 +135,7 @@ class Weather:
     pm10: float | None = None
     observed: str = ""  # 观测时间（当地时间）
     days: tuple[Day, ...] = ()  # 今天起 7 天的预报（首页日历用，spec [2026-10-23] §33）
+    stale: bool = False  # 这次没连上天气服务，用的是之前取到的（§262 补）
 
     @property
     def text(self) -> str:
@@ -236,7 +238,7 @@ def summary(w: Weather) -> str:
 
 
 def case_line(w: Weather | None) -> str:
-    """写进共享档案的一行；取不到天气时为空。"""
+    """天气一行（"推荐一餐"页面用；对话作答不带天气，问到时用工具查，§262）；取不到天气时为空。"""
     if w is None:
         return ""
     return f"现在的天气：{summary(w)}。对训练的影响：{assess(w).line()}"
@@ -327,7 +329,8 @@ QUERY_SCHEMA: dict[str, Any] = {
         "name": QUERY,
         "description": (
             "查天气：现在的天气、体感、湿度、风、空气质量和对户外训练的影响，以及今天起 7 天每天的天气、"
-            "最高最低温、降水概率、风和适不适合户外。他问天气、明天或这周哪天能在外面跑、要不要改室内时调用。"
+            "最高最低温、降水概率、风和适不适合户外。他问天气、户外能不能练、明天或这周哪天能在外面跑、要不要改室内、"
+            "天热天冷怎么补水穿衣时调用（档案里不带天气，§262）。"
             "不写城市查他设的地方；他说了别的城市才写 city。"
         ),
         "parameters": {
@@ -363,7 +366,8 @@ def report(w: Weather) -> str:
         now.append(f"湿度 {w.humidity:.0f}%")
     if w.wind_kmh is not None:
         now.append(f"风 {w.wind_kmh:.0f} 公里/小时")
-    lines = [f"现在（{w.observed or '刚取到'}）：{'，'.join(now)}；对户外训练：{assess(w).line()}"]
+    when = f"{w.observed}，刚才没连上天气服务，这是之前取到的" if w.stale else (w.observed or "刚取到")
+    lines = [f"现在（{when}）：{'，'.join(now)}；对户外训练：{assess(w).line()}"]
     lines += [day_line(d) for d in w.days]
     return "\n".join(lines)
 
@@ -374,6 +378,15 @@ async def fetch(place: Place) -> Weather:
     if hit and time.monotonic() - hit[0] < CACHE_S:
         return hit[1]
     point = {"latitude": place.lat, "longitude": place.lon, "timezone": "auto"}
+    try:
+        return await _fetch(place, key, point)
+    except Exception:
+        if hit and time.monotonic() - hit[0] < STALE_S:  # 一时连不上：先用 3 小时内取到过的，写明是几点的
+            return replace(hit[1], stale=True)
+        raise
+
+
+async def _fetch(place: Place, key: tuple[float, float], point: dict[str, Any]) -> Weather:
     got = await asyncio.gather(
         _get(
             FORECAST_URL,

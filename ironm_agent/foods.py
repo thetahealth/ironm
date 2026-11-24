@@ -18,7 +18,6 @@ FOODS_PATH = Path(__file__).with_name("foods.yaml")
 type Oil = Literal["少油", "正常", "多油"]
 OIL_FACTOR: dict[str, float] = {"少油": 0.5, "正常": 1.0, "多油": 1.5}
 OIL_ID = "oil"
-MAX_GRAMS = 3000
 
 
 @dataclass(frozen=True)

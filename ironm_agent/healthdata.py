@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
@@ -271,3 +272,98 @@ async def read_all(
         height = None
     return Readings(sleep_hours=sleep, height_cm=height, waist=waist, body_fat=body_fat,
                     errors=tuple(errors), **got)  # fmt: skip
+
+
+# ---- 化验（spec [2026-10-23] §255 需求 1）---------------------------------------------------------
+# 档案每轮带每项化验最近一次的数、日期、和化验单参考范围比的结果；明细和走势由作答时按需查。
+
+_LABS_SQL = """
+SELECT DISTINCT ON (o.series_id)
+       COALESCE(NULLIF(o.name_text, ''), NULLIF(o.display_zh, ''), o.display) AS name,  -- 化验单上印的名字在前
+       o.value_text, o.value_num, o.unit_text, o.ref_text, o.ref_low, o.ref_high, o.flag_text, o.local_date,
+       COALESCE(o.display, '') AS std  -- 标准名（英文），认指标用（§265）
+  FROM v_observation o
+ WHERE o.user_id = :uid AND o.modality = 'lab-report'
+ ORDER BY o.series_id, o.local_date DESC, o.elected DESC, o.observed_start DESC, o.id DESC
+"""
+
+
+@dataclass(frozen=True)
+class Lab:
+    """一项化验最近一次的结果。"""
+
+    name: str
+    value: str
+    unit: str
+    day: date | None
+    ref: str = ""
+    verdict: str = ""  # 偏高 / 偏低 / 正常；没有参考范围时为空
+    std: str = ""  # 标准名（英文），认指标用（§265）
+    num: float | None = None
+    low: float | None = None
+    high: float | None = None
+
+
+def lab_verdict(value: float | None, low: float | None, high: float | None, flag: str = "") -> str:
+    """和化验单的参考范围比；化验单自己标了高低时以它为准。"""
+    flag = (flag or "").strip().lower()
+    if flag in ("h", "high", "hh", "偏高", "↑"):
+        return "偏高"
+    if flag in ("l", "low", "ll", "偏低", "↓"):
+        return "偏低"
+    if value is None or (low is None and high is None):
+        return ""
+    if high is not None and value > high:
+        return "偏高"
+    if low is not None and value < low:
+        return "偏低"
+    return "正常"
+
+
+def _float(x: Any) -> float | None:
+    try:
+        return None if x is None else float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+async def latest_labs(user_id: str) -> list[Lab]:
+    """每项化验最近一次；读不到时返回空列表。"""
+    from mirobody.utils.db import execute_query
+
+    rows = await execute_query(_LABS_SQL, {"uid": str(user_id)}, log_sql=False) or []
+    out: list[Lab] = []
+    for r in rows:
+        day = r.get("local_date")
+        out.append(Lab(
+            str(r.get("name") or "").strip(), str(r.get("value_text") or "").strip(),
+            str(r.get("unit_text") or "").strip(), day if isinstance(day, date) else None,
+            str(r.get("ref_text") or "").strip(),
+            lab_verdict(_float(r.get("value_num")), _float(r.get("ref_low")), _float(r.get("ref_high")),
+                        str(r.get("flag_text") or "")),
+            str(r.get("std") or "").strip(), _float(r.get("value_num")), _float(r.get("ref_low")),
+            _float(r.get("ref_high")),
+        ))  # fmt: skip
+    return [x for x in out if x.name and x.value]
+
+
+def labs_line(labs: Sequence[Lab], today: date) -> str:
+    """档案里的一行：偏高偏低的在前；一年以前的写"很久以前"。"""
+    order = {"偏高": 0, "偏低": 0, "": 1, "正常": 2}
+    parts = []
+    for x in sorted(labs, key=lambda x: (order.get(x.verdict, 1), x.name)):
+        when = x.day.isoformat() if x.day else "日期不明"
+        if x.day and (today - x.day).days > 365:
+            when += "，一年多以前"
+        judged = f"{x.verdict}，" if x.verdict else ""
+        ref = f"参考 {x.ref}" if x.ref else "化验单没印参考范围：不说偏高偏低和正不正常"
+        parts.append(f"{x.name} {x.value}{(' ' + x.unit) if x.unit else ''}（{judged}{ref}；{when}）")
+    return "；".join(parts)
+
+
+async def current_meds(user_id: str) -> str:
+    """他记在 mirobody 里正在用的药（一段表格文字，认药名用，§265）；读不到时为空。"""
+    from mirobody.agent.tools.medications_service import MedicationsService
+
+    out = await MedicationsService().query_medications({"user_id": str(user_id)}, view="plan")
+    return str(out.get("result") or "") if isinstance(out, dict) else ""

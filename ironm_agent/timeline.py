@@ -23,7 +23,7 @@ SCHEMA: dict[str, Any] = {
         "name": "timeline",
         "description": (
             "查这个人最近一段时间发生了什么：生病和好了、伤病和近期的事、说疼的部位、训练记录、管家做过的调整（原因和效果）、"
-            "计划哪天换的、改过什么。"
+            "计划哪天换的、改过什么、每天吃了多少。"
             '回答"上周为什么给我减量了""这个月怎么样""最近发生了什么""我的计划上次什么时候改的"时用。'
         ),
         "parameters": {
@@ -59,6 +59,7 @@ def build(
     workouts: Sequence[Any] = (),
     changes: Sequence[Any] = (),
     plans: Sequence[tuple[date, str]] = (),
+    meals: Sequence[Any] = (),
 ) -> list[str]:
     """按日期排好的时间线（新的在后）。plans 是计划的改动（哪天、换了还是改了什么，§230）。"""
     start = today - timedelta(days=days - 1)
@@ -107,6 +108,14 @@ def build(
         effect = f"；效果：{c.outcome}" if c.outcome else ""
         rows.append((c.day, 4, f"管家：{c.after}{why}{effect}"))
     rows += [(d, 5, text) for d, text in plans if start <= d <= today]
+    by_day: dict[date, list[Any]] = {}  # 每天吃了多少（§261）：一天一行
+    for m in meals:
+        if start <= m.day <= today and getattr(m, "deleted", None) is None:
+            by_day.setdefault(m.day, []).append(m)
+    for d, ms in by_day.items():
+        kcal = round(sum(m.meal.macros.kcal for m in ms))
+        protein = round(sum(m.meal.macros.protein_g for m in ms))
+        rows.append((d, 6, f"吃了 {len(ms)} 顿约 {kcal} 千卡、蛋白质 {protein} 克"))
     rows.sort(key=lambda r: (r[0], r[1]))
     lines = [f"{_md(d)} {text}" for d, _, text in rows][-MAX_LINES:]
     return lines
@@ -121,6 +130,7 @@ def tool(
     workouts: Callable[[date], Awaitable[Sequence[Any]]] | None = None,
     changes: Callable[[], Awaitable[Sequence[Any]]] | None = None,
     plans: Callable[[], Awaitable[Sequence[tuple[date, str]]]] | None = None,
+    meals: Callable[[date], Awaitable[Sequence[Any]]] | None = None,
 ) -> Any:
     """给管家的时间线工具（只读）。"""
 
@@ -138,6 +148,7 @@ def tool(
             workouts=(await _safely("workouts", workouts(start)) if workouts else None) or (),
             changes=(await _safely("coach", changes()) if changes else None) or (),
             plans=(await _safely("plans", plans()) if plans else None) or (),
+            meals=(await _safely("meals", meals(start)) if meals else None) or (),
         )  # fmt: skip
         _log.info("timeline: days=%d lines=%d", days, len(lines))
         if not lines:

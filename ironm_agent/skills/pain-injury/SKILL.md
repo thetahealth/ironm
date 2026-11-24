@@ -5,8 +5,6 @@ name: 伤痛处理
 use: 某处疼、分不清酸痛还是受伤、动作怎么改、伤后怎么回到训练、要不要去医院
 brief: 哪里疼、受伤、要不要就医
 not_for: 发烧感冒这类生病、只是练后普遍酸、今天怎么练用「今天练不练」
-when: [疼, 痛, 不舒服, 响, 弹响, 膝盖, 腰, 肩膀, 手腕, 脚踝, 扭了, 拉伤, 受伤, 酸痛, 第二天疼, 伤好了, 康复后, 受伤后, 手术后, 恢复训练, 要不要去医院, 要去医院, 去医院, 要看医生吗, 胸闷, 心慌, 头晕, 肿, 麻]
-on: [injury]
 tools: [pain_check, find_substitutes, search_exercises, recall_memory, training_patterns, check_plan]
 refs: [K08, K15, K33, K44, K45, K46, K47, K103, K104, K105, K106]
 ---

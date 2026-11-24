@@ -242,6 +242,8 @@ make pg-install pg-init                # 本机 PostgreSQL 18 + pgvector（需�
 make run                               # http://127.0.0.1:18090
 ```
 
+测评用 [mirobody-env](https://github.com/thetahealth/mirobody-env)：用来构造环境充分测试智能体。
+
 ## 🙏 致谢
 
 健康数据底座来自 [mirobody](https://github.com/thetahealth/mirobody)。动作配图来自 [wger](https://wger.de) 和 [Everkinetic](https://github.com/everkinetic/data)（CC BY-SA），食物照片来自 Unsplash 和 Pexels，排行榜配图来自 Wikimedia Commons，作者和许可记在 `ironm_agent/*_images.yaml`，页面上有署名；图片不在仓库里，安装时按清单下载。营养数据参考 USDA FoodData Central。说话和视频转文字用的是阿里通义实验室的 [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice)（FunASR 模型协议），通过 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 运行；取视频的声音用 [PyAV](https://github.com/PyAV-Org/PyAV)（带 FFmpeg 库）。

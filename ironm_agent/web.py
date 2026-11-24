@@ -9,6 +9,7 @@ import re
 import tempfile
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -31,7 +32,7 @@ from ironm_agent.memory_extract import MAX_CONTENT
 from ironm_agent.memory_prefs import refresh as refresh_prefs
 from ironm_agent.memory_store import CATEGORIES, ORIGINS, Item, MemoryStore, default_store
 from ironm_agent.memory_view import expired
-from ironm_agent.metrics import ACTIVITY, GOALS, KcalAdjust, Metric, compute_all
+from ironm_agent.metrics import ACTIVITY, GOALS, KcalAdjust, Metric, Readings, compute_all
 from ironm_agent.progression import targets
 from ironm_agent.training import (
     SORE_PARTS,
@@ -79,9 +80,35 @@ async def snapshot_for(user_id: str, today: date | None = None) -> Snapshot:
 
     today = today or date.today()
     readings = await read_all(HealthIndicatorsService(), user_id, today)
+    readings = await with_body(readings, user_id)
     profile, _ = await profiles.load(user_id)
     adjust = await kcal_adjust(user_id)
     return Snapshot(profile, readings, tuple(compute_all(readings, profile, today, adjust)), today)
+
+
+async def with_body(readings: Readings, user_id: str) -> Readings:
+    """读数里加上化验、正在用的药、后台读报告认出的情况（§265）：认危险情况用；某样读不到就空着。"""
+    from dataclasses import replace
+
+    from ironm_agent.healthdata import current_meds, latest_labs
+
+    got: dict[str, Any] = {}
+    for key, read in (("labs", latest_labs), ("meds", current_meds)):
+        try:
+            value = await read(user_id)
+            got[key] = tuple(value) if key != "meds" else value
+        except Exception as e:
+            _log.warning("body data unavailable: key=%s error_type=%s", key, type(e).__name__)
+    try:  # 后台读好的身体情况（§265，body_reading.py）；还没读过时为空
+        from ironm_agent.body_reading import default_body
+
+        body = await default_body().get(user_id)
+        if body is not None:
+            got.update(body_codes=body.codes, body_line=body.line, body_text=body.text, body_day=body.made.date(),
+                       body_states=body.states)
+    except Exception as e:
+        _log.warning("body data unavailable: key=body error_type=%s", type(e).__name__)
+    return replace(readings, **got)
 
 
 async def kcal_adjust(user_id: str) -> KcalAdjust | None:
@@ -154,15 +181,41 @@ async def put_profile(
     return await get_profile(user_id)
 
 
+@cache
+def _hits() -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """每个动作主要练到、辅助练到的肌肉和它们在人体图上的分区（首页的人体图用，§252）。"""
+    from ironm_agent import body
+    from ironm_agent.protools.movement import moves
+
+    nodes = body.table().nodes
+
+    def side(codes: tuple[str, ...]) -> list[dict[str, Any]]:
+        return [
+            {"name": nodes[c].name, "group": nodes[c].parent, "flat": list(nodes[c].flat)}
+            for c in codes
+            if c in nodes
+        ]
+
+    return {
+        m.exercise.id: {"main": side(m.tag.muscles), "assist": side(m.tag.assist)} for m in moves()
+    }
+
+
 @router.get("/iron/api/exercises")
 async def get_exercises(user_id: str = Depends(_verify())) -> dict[str, Any]:
     lib = library()
+    hits = _hits()
     return {
         "parts": PARTS,
         "equipment": EQUIPMENT,
         "note": NOTE,
         "exercises": [
-            {**x.model_dump(), "images": images_for(x.id), "gif": gif_for(x.id)}
+            {
+                **x.model_dump(),
+                "images": images_for(x.id),
+                "gif": gif_for(x.id),
+                "hits": hits.get(x.id, {"main": [], "assist": []}),
+            }
             for x in lib.exercises
         ],
     }
@@ -655,6 +708,12 @@ async def get_training(
     }
 
 
+def _body_titles() -> dict[str, str]:
+    from ironm_agent.body_risks import TITLES
+
+    return TITLES
+
+
 RISK_TITLES = {
     "bp_crisis": "血压很高：先别运动，尽快就医",
     "bp_high": "血压偏高：加大训练前先找医生",
@@ -664,6 +723,7 @@ RISK_TITLES = {
     "diabetes": "糖尿病：留意运动前后的血糖",
     "hypertension": "高血压：不憋气、不做大重量",
     "surgery": "近期手术：恢复训练前先问医生",
+    **_body_titles(),  # 化验、用药认出的（§265）
 }
 
 
@@ -848,3 +908,8 @@ router.include_router(_chains)
 from ironm_agent.web_pose import router as _pose  # noqa: E402
 
 router.include_router(_pose)
+
+# 推荐下面的"记这顿"（spec [2026-10-23] §261）
+from ironm_agent.web_options import router as _options  # noqa: E402
+
+router.include_router(_options)

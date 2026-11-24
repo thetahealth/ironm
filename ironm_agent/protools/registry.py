@@ -231,6 +231,14 @@ async def _cardio(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
                   minutes=_num(args, "minutes"))  # fmt: skip
 
 
+async def _lab_change(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
+    from ironm_agent.protools.lab_change import lab_change
+
+    return lab_change(str(args.get("name") or ""), _num(args, "before"), _num(args, "after"), cv_i=_num(args, "cv_i"),
+                      cv_a=_num(args, "cv_a"), cv_a_before=_num(args, "cv_a_before"),
+                      cv_a_after=_num(args, "cv_a_after"), rcv=_num(args, "rcv"))  # fmt: skip
+
+
 async def _diet_templates(ctx: ToolContext, args: Mapping[str, Any]) -> Result:
     """饮食方案库（§184）：不填 name 给目录，填了给那一份（有热量目标时按目标缩放份数）。"""
     from ironm_agent.diet_library import diet_templates
@@ -427,7 +435,7 @@ TOOLS: dict[str, ProTool] = {
             "check_plan",
             frozenset({"trainer", "general"}),
             "检查一份训练计划：各肌群每周组数与练几次、新手的天数与组数、同一肌群是否连续两天、"
-            "伤病部位的动作、器械是否齐、每次时长，以及和当前计划相比改了什么。写好计划后先检查，有问题就改。",
+            "伤病部位的动作、器械是否齐、每次时长，以及和当前计划相比改了什么。他让检查他自己的计划时用；交计划时系统会自己检查。",
             _obj(
                 {
                     "plan": _PLAN,
@@ -550,6 +558,27 @@ TOOLS: dict[str, ProTool] = {
                 ("kind",),
             ),
             _cardio,
+        ),
+        ProTool(
+            "lab_change",
+            frozenset({"recovery", "general"}),
+            "两次化验比较（§271）：算这次比上次变了多少，再和两次测量的参考变化量（正常波动）比，说没超过还是超过了。"
+            "波动参数从他给的规程、报告里取：个体内波动 cv_i、检测误差 cv_a（两次方法不同时分别写 cv_a_before、cv_a_after），"
+            "或者写好的参考变化量 rcv（都是百分数）；没有就不填，只算变了多少。只算幅度，变化来源由你按采样条件、方法、用药、病程的证据判断。",
+            _obj(
+                {
+                    "name": {"type": "string", "description": "指标名，如 肌酐"},
+                    "before": {"type": "number", "description": "上次的读数"},
+                    "after": {"type": "number", "description": "这次的读数"},
+                    "cv_i": {"type": "number", "description": "个体内波动 CVI，百分数"},
+                    "cv_a": {"type": "number", "description": "检测误差 CVA，百分数（两次同一方法）"},
+                    "cv_a_before": {"type": "number", "description": "上次那种方法的检测误差，百分数"},
+                    "cv_a_after": {"type": "number", "description": "这次那种方法的检测误差，百分数"},
+                    "rcv": {"type": "number", "description": "规程或报告里写好的双侧参考变化量，百分数"},
+                },
+                ("before", "after"),
+            ),
+            _lab_change,
         ),
         ProTool(
             "diet_templates",

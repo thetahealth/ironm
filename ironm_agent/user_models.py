@@ -102,7 +102,7 @@ def config_for(m: UserModel) -> ModelsConfig:
     chat = stage(m.chat_model)
     return ModelsConfig(
         turn_budget=load_models().turn_budget,
-        stages={"route": chat, "expert": chat, "compose": chat, "memory": chat, "coach": chat,
+        stages={"expert": chat, "compose": chat, "memory": chat, "coach": chat,
                 "vision": stage(m.vision_model or m.chat_model)},
     )  # fmt: skip
 

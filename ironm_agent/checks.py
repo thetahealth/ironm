@@ -20,11 +20,11 @@ from ironm_agent.numbers import traced, written_numbers
 
 EXPERIENCE = "〔经验〕"
 KB_REF = re.compile(r"〔(K\d{2,4})〕")
-CALC_REF = re.compile(r"〔(C\d{1,2})〕")
-ANY_REF = re.compile(r"〔(?:K\d{2,4}|C\d{1,2}|经验)〕")
+CALC_REF = re.compile(r"〔(C\d{1,3})〕")
+ANY_REF = re.compile(r"〔(?:K\d{2,4}|C\d{1,3}|经验)〕")
 _STATEMENT = re.compile(r"<statement>.*?</statement>", re.S)
 # 句子的结尾：句号、问号、叹号、分号、换行；紧跟在结尾后面的出处标记仍属于前一句
-_SENTENCE = re.compile(r"[^。！？；\n]*(?:[。！？；\n]|$)(?:[ \t]*〔(?:K\d{2,4}|C\d{1,2}|经验)〕)*")
+_SENTENCE = re.compile(r"[^。！？；\n]*(?:[。！？；\n]|$)(?:[ \t]*〔(?:K\d{2,4}|C\d{1,3}|经验)〕)*")
 _END = re.compile(r"([。！？；]?)(\s*)$")
 
 
@@ -34,6 +34,22 @@ def sentences(text: str) -> list[str]:
 
 def _shown(values: Sequence[float]) -> str:
     return "、".join(f"{v:g}" for v in dict.fromkeys(values))
+
+
+_ENERGY = re.compile(r"(\d+(?:\.\d+)?)\s*(?:[–\-~～至到]\s*(\d+(?:\.\d+)?)\s*)?(?:千卡|大卡|kcal|卡路里)", re.I)
+
+
+def _energy(text: str) -> list[float]:
+    """这句里写的热量数（千卡、大卡），范围两头都算。"""
+    return [float(x) for m in _ENERGY.finditer(ANY_REF.sub("", text)) for x in m.groups() if x]
+
+
+def _derived(loose: Sequence[float], known: Sequence[float]) -> list[float]:
+    """对不上的数里，能由这句里已经对上的数算出来的（两个数之差、之和，或全部相加）不算对不上（§256）。"""
+    if len(known) < 2:
+        return list(loose)
+    total = sum(known)
+    return [v for v in loose if not (traced(v, [total]) or traced(v, [], data=known))]
 
 
 def _calc_numbers(text: str, calcs: Mapping[str, str]) -> list[float]:
@@ -65,10 +81,14 @@ def _sentence_problems(
     experience: Sequence[float] | None = None,
 ) -> list[str]:
     if EXPERIENCE in sentence:
-        # 专业 Agent 凭经验说的：用户看得到，不核对数字（experience 为 None）；
+        # 专业 Agent 凭经验说的：不核对数字（experience 为 None），热量除外——热量要照菜单、食物库或计算（§256）；
         # 管家整合时：经验句里的数字必须来自某位专业 Agent 的意见，整合不能自己加数字
-        if experience is None:
-            return []
+        if experience is None:  # 明说是估的（看照片估）照旧算经验；这一轮查到、算出的热量里有这个数的也算对得上
+            given = [*own, *(v for c in calcs.values() for v in written_numbers(c)),
+                     *(v for e in entries.values() for v in written_numbers(e.as_evidence()))]  # fmt: skip
+            kcal = [] if "估" in sentence else [v for v in _energy(sentence) if not traced(v, given)]
+            return ([f"「{sentence.strip()[:30]}…」里的热量 {_shown(kcal)} 千卡没有出处：热量照菜单、食物库或计算写，"
+                     "句末标对应的〔C编号〕；查不到就不报数"] if kcal else [])  # fmt: skip
         loose = [
             v
             for v in written_numbers(ANY_REF.sub("", sentence))
@@ -82,7 +102,8 @@ def _sentence_problems(
     refs = [r for r in KB_REF.findall(sentence) if r in entries]
     pool = [v for r in refs for v in written_numbers(entries[r].as_evidence())] + own
     pool += _calc_numbers(sentence, calcs)
-    loose = [v for v in written_numbers(ANY_REF.sub("", sentence)) if not traced(v, pool)]
+    written = written_numbers(ANY_REF.sub("", sentence))
+    loose = _derived([v for v in written if not traced(v, pool)], [v for v in written if traced(v, pool)])
     if not loose:
         return []
     where = (
@@ -229,7 +250,7 @@ def repair(
 
 # 数字后面跟的单位：补出处时要求资料里同一个数后面也是这个单位，免得"3 组"对上资料里不相干的 3（审查 11-05）
 _UNIT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:[–\-~～至到]\s*(\d+(?:\.\d+)?)\s*)?([%％]|[a-zA-Z]{1,4}|[\u4e00-\u9fff]{1,2})"
+    r"(\d+(?:\.\d+)?)\s*(?:[–\-~～至到]\s*(\d+(?:\.\d+)?)\s*)?([%％℃°]|[a-zA-Z]{1,4}|[\u4e00-\u9fff]{1,2})"
 )
 _ABOUT_HIM = re.compile(r"你|您")
 
@@ -267,7 +288,34 @@ def _source_for(sentence: str, loose: Sequence[float], *, cited: Sequence[str], 
         hit := [r for r, vals in support.items() if all(traced(v, list(vals)) for v in loose)]
     ) == 1:
         return f"<cite>[{hit[0]}]</cite>"
-    return None
+    return _covered(want, cited=cited, entries=entries, calcs=calcs)
+
+
+def _covered(want: set[tuple[float, str]], *, cited: Sequence[str], entries: Mapping[str, Entry],
+             calcs: Mapping[str, str]) -> str | None:  # fmt: skip
+    """一句里的数分别来自几处（§256）：每个数连同单位在计算或资料里各找一处（最多三处），
+    剩下的能由已对上的数相加减算出来也算。都对不上返回 None。"""
+    marks: list[str] = []
+    left = set(want)
+    pools = [*((f"〔{c}〕", calcs[c]) for c in calcs),
+             *((f"〔{r}〕", entries[r].as_evidence()) for r in dict.fromkeys([*cited, *entries]) if r in entries)]  # fmt: skip
+    def has(text: str, w: tuple[float, str]) -> bool:
+        return any(abs(w[0] - hv) < 1e-9 and w[1][:1] == hu[:1] for hv, hu in _units(text))
+
+    if any(sum(has(text, w) for _, text in pools) > 1 for w in want):
+        return None  # 几处都对得上：可能认错，照旧退回（审查 11-05）
+    for mark, text in pools:
+        got = {w for w in left if has(text, w)}
+        if got:
+            marks.append(mark)
+            left -= got
+        if not left:
+            break
+    if left:
+        known = [v for v, _ in want - left]
+        if _derived([v for v, _ in left], known):
+            return None
+    return "".join(marks) if marks and len(marks) <= 3 else None
 
 
 _LEAD = re.compile(r"\s*(?:[-•*]|\d+[.、)])?\s*")
@@ -378,3 +426,36 @@ def plain(text: str) -> str:
     out = _STATEMENT_TAG.sub("", _CITE.sub("", _ANY_MARK.sub("", ANY_REF.sub("", text))))
     out = _SPACE_BEFORE_PUNCT.sub(r"\1", out).replace("（）", "").replace("()", "")
     return _LOOSE_PUNCT.sub(lambda m: m.group(1) or m.group(2) or m.group(3), out).strip()
+
+
+def loose_kinds(
+    text: str,
+    *,
+    entries: Mapping[str, Entry],
+    calcs: Mapping[str, str],
+    support: Mapping[str, Sequence[float]],
+    question: str,
+    found: Sequence[str] = (),
+) -> dict[str, int]:
+    """初稿里对不上的数各属于哪一类（§256，运行记录只记类别和个数，不记原文）：
+    given 这一轮系统给过（计算、资料、数据行、工具结果里有这个数）；derived 能由这句里对上的数相加减算出；
+    none 哪都没有（多半是凭记忆写的）。"""
+    from collections import Counter
+
+    own = written_numbers(question)
+    given = [*own, *(v for c in calcs.values() for v in written_numbers(c)),
+             *(v for e in entries.values() for v in written_numbers(e.as_evidence())),
+             *(v for vals in support.values() for v in vals), *(v for t in found for v in written_numbers(t))]  # fmt: skip
+    out: Counter[str] = Counter()
+    for sentence in sentences(_STATEMENT.sub("", text)):
+        if not _sentence_problems(sentence, entries=entries, calcs=calcs, own=own):
+            continue
+        refs = [r for r in KB_REF.findall(sentence) if r in entries]
+        pool = [v for r in refs for v in written_numbers(entries[r].as_evidence())] + own
+        pool += _calc_numbers(sentence, calcs)
+        written = _energy(sentence) if EXPERIENCE in sentence else written_numbers(ANY_REF.sub("", sentence))
+        loose = [v for v in written if not traced(v, pool)]
+        known = [v for v in written if traced(v, given)]
+        for v in loose:
+            out["given" if traced(v, given) else "derived" if not _derived([v], known) else "none"] += 1
+    return dict(out)

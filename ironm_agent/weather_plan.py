@@ -108,25 +108,4 @@ def weekday(d: date) -> str:
     return f"周{WEEKDAYS[d.isoweekday() - 1]}"
 
 
-def line(p: DayPlan) -> str:
-    """一天的调整写成一句话（管家方案和共享档案用）。"""
-    text = p.weather.text if p.weather else ""
-    head = f"{weekday(p.day)}{text}" if text else weekday(p.day)
-    body = "；".join(p.changes)
-    tail = f"，也可以挪到{weekday(p.better)}（天气好）" if p.better else ""
-    return f"{head}：{p.session.name if p.session else ''}{body and '，' + body}{tail}"
-
-
-def forecast_line(days: Sequence[Day], today: date, n: int = 6) -> str:
-    """未来几天的天气，写进共享档案（训练教练排计划、安排今天时照顾天气）。"""
-    parts: list[str] = []
-    for d in days:
-        x = date.fromisoformat(d.day)
-        if x <= today or len(parts) >= n:
-            continue
-        rain = f"，降水{d.rain}%" if d.rain is not None and d.rain >= 30 else ""
-        parts.append(f"{weekday(x)}{d.text} {d.tmin:.0f}–{d.tmax:.0f}℃{rain}")
-    return "；".join(parts)
-
-
-__all__ = ["INDOOR", "DayPlan", "forecast_line", "line", "week_plan", "weekday"]
+__all__ = ["INDOOR", "DayPlan", "week_plan", "weekday"]

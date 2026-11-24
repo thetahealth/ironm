@@ -2595,3 +2595,106 @@ entries:
     url: https://exrx.net/Testing/WeightLifting/StrengthStandards
     review: approved
 
+
+  # ---- 体检数据打通临床、饮食、训练（spec [2026-10-23] §265）：化验认出危险情况的依据 ----
+  - id: K127
+    domains: [nutrition, safety, data]
+    title: 慢性肾病的人蛋白质吃多少（KDIGO 2024）
+    source: KDIGO 2024 Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease（Kidney Int 105(4S):S117–S314）
+    publisher: 改善全球肾脏病预后组织（KDIGO）
+    year: 2024
+    level: guideline
+    population: 成年慢性肾病患者（不含透析）
+    summary: 肾小球滤过率低于 60 是慢性肾病 G3 期起；这类人蛋白质维持在每天约 0.8 克/公斤，有进展风险的避免高蛋白（每天超过 1.3 克/公斤）；鼓励每周累计至少 150 分钟中等强度活动，或做到心血管和体能耐受的程度。
+    points:
+      - text: 按肾小球滤过率分期，45–59 为 G3a，30–44 为 G3b，15–29 为 G4，低于 15 为 G5。
+        where: Current CKD Nomenclature Used by KDIGO（热图，S126）
+      - text: G3–G5 期（未透析）的成年人，建议蛋白质摄入维持在每天 0.8 克/公斤。
+        where: Recommendation 3.3.1.1（2C），3.3.1 Protein intake，S208
+      - text: 有进展风险的成年慢性肾病患者，避免每天超过 1.3 克/公斤的高蛋白摄入。
+        where: Practice Point 3.3.1.1，3.3.1 Protein intake
+      - text: 建议慢性肾病患者每周累计至少 150 分钟中等强度身体活动，或做到心血管和体能耐受的程度；避免久坐。
+        where: Recommendation 3.2.2.1（1D）、Practice Point 3.2.2.2，3.2.2 Physical activity and optimum weight，S207
+    keywords: [肾功能, 肾小球滤过率, eGFR, 肌酐, 肾病, 蛋白质上限]
+    url: https://kdigo.org/guidelines/ckd-evaluation-and-management/
+    review: claude_draft
+
+  - id: K128
+    domains: [data, safety]
+    title: 血红蛋白多少算贫血、贫血轻重怎么分（WHO）
+    source: Haemoglobin concentrations for the diagnosis of anaemia and assessment of severity（WHO/NMH/NHD/MNM/11.1）
+    publisher: 世界卫生组织
+    year: 2011
+    level: guideline
+    population: 15 岁以上非孕期成年人
+    summary: 按血红蛋白（克/升）分：女性低于 120、男性低于 130 算贫血；110 起是轻度，80–109 是中度，低于 80 是重度。数值按海平面，高海拔和吸烟的人要校正；WHO 2024 年新指南里成人（15–65 岁）的数值相同。
+    points:
+      - text: 15 岁以上非孕期女性：120 以上不贫血，110–119 轻度，80–109 中度，低于 80 重度（克/升）。
+        where: Table 1
+      - text: 15 岁以上男性：130 以上不贫血，110–129 轻度，80–109 中度，低于 80 重度（克/升）。
+        where: Table 1
+      - text: 表中数值是海平面的；海拔 1000 米以上和吸烟的人先按海拔、吸烟校正。
+        where: Table 1 表头；Table 2、Table 3
+    keywords: [贫血, 血红蛋白, 血常规, 缺铁]
+    url: https://www.who.int/publications/i/item/WHO-NMH-NHD-MNM-11.1
+    review: claude_draft
+
+  - id: K129
+    domains: [safety, training]
+    title: 哪些身体情况要先纠正再做大强度运动（AHA 运动测试与训练标准）
+    source: Exercise Standards for Testing and Training — A Scientific Statement From the American Heart Association（Circulation 128(8):873–934）
+    publisher: 美国心脏协会（AHA），Fletcher 等
+    year: 2013
+    level: consensus
+    population: 成年人（运动测试与运动训练）
+    summary: 美国心脏协会的科学声明：明显贫血、重要的电解质紊乱、甲亢这类没纠正的情况，是运动测试的相对禁忌证。IronM 据此引申为：这些情况先请医生处理，再做大强度训练。
+    points:
+      - text: 运动测试的相对禁忌证包括没纠正的身体情况，例如明显贫血、重要的电解质紊乱和甲亢。
+        where: Exercise Testing Procedures › Absolute and Relative Contraindications to Exercise Testing（列表）
+      - text: 静息血压高于 200/110 mmHg 是运动测试的相对禁忌证。
+        where: Exercise Testing Procedures › Absolute and Relative Contraindications to Exercise Testing（列表）
+    keywords: [贫血, 电解质, 血钾, 甲亢, 运动禁忌, 先看医生]
+    url: https://doi.org/10.1161/CIR.0b013e31829b5b44
+    review: claude_draft
+
+  - id: K130
+    domains: [data, safety, nutrition]
+    title: 转氨酶偏高怎么看（ACG 肝功能异常临床指南）
+    source: ACG Clinical Guideline — Evaluation of Abnormal Liver Chemistries（Am J Gastroenterol 112(1):18–35）
+    publisher: 美国胃肠病学会（ACG），Kwo、Cohen、Lim
+    year: 2017
+    level: guideline
+    population: 成年人
+    summary: 转氨酶按是正常上限的几倍分轻重；查原因时要问喝酒、药物（含非处方药）、草药和膳食补剂；肌肉损伤和运动也会让转氨酶升高，以 AST 为主。
+    points:
+      - text: 转氨酶升高按正常上限的倍数分为临界（< 2 倍）、轻度（2–5 倍）、中度（5–15 倍）、重度（> 15 倍），超过 10000 IU/L 为极重。
+        where: Approach to evaluation for those with elevated AST and ALT（Summary statement；Table 4）
+      - text: 评估肝功能异常要问清饮酒、药物（含非处方药）和草药补剂；膳食补剂要专门问。
+        where: Clinical assessment of the patient with abnormal liver chemistries（Summary statement）；Drug and supplement-induced liver injury
+      - text: 肌肉损伤和运动也会让转氨酶升高，以 AST 为主；排除常见原因后可以查肌酸激酶或醛缩酶。
+        where: Rare causes
+    keywords: [转氨酶, ALT, AST, 谷丙, 肝功能, 补剂伤肝]
+    url: https://journals.lww.com/ajg/fulltext/2017/01000/acg_clinical_guideline__evaluation_of_abnormal.13.aspx
+    review: claude_draft
+
+  - id: K131
+    domains: [nutrition, data]
+    title: 痛风、尿酸高的人饮食怎么调（ACR 2020 痛风指南）
+    source: 2020 American College of Rheumatology Guideline for the Management of Gout（Arthritis Care Res 72(6):744–760）
+    publisher: 美国风湿病学会（ACR），FitzGerald 等
+    year: 2020
+    level: guideline
+    population: 成年痛风患者
+    summary: 不管疾病活动度，有条件地建议痛风患者限制饮酒、限制嘌呤摄入、限制高果糖玉米糖浆；超重肥胖的减重。
+    points:
+      - text: 有条件地建议痛风患者限制饮酒。
+        where: Table 7 Management of lifestyle factors
+      - text: 有条件地建议痛风患者限制嘌呤摄入。
+        where: Table 7 Management of lifestyle factors
+      - text: 有条件地建议痛风患者限制高果糖玉米糖浆的摄入。
+        where: Table 7 Management of lifestyle factors
+      - text: 超重或肥胖的痛风患者，有条件地建议减重。
+        where: Table 7 Management of lifestyle factors
+    keywords: [尿酸, 痛风, 嘌呤, 高尿酸, 啤酒, 海鲜]
+    url: https://doi.org/10.1002/acr.24180
+    review: claude_draft

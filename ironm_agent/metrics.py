@@ -11,7 +11,7 @@ import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 type Goal = Literal["muscle", "strength", "fat_loss", "endurance", "health"]
 type Activity = Literal["sedentary", "light", "moderate", "active", "very_active"]
@@ -549,6 +549,14 @@ class Readings:
     exercise_min: tuple[Point, ...] = ()  # 每天的运动时长（分钟）
     vo2max: tuple[Point, ...] = ()  # 毫升/公斤/分钟
     errors: tuple[str, ...] = field(default=())  # 哪些数据没读到
+    # 化验、用药、后台读报告认出的情况（§265）：认危险情况用（body_risks.py）
+    labs: tuple[Any, ...] = ()  # healthdata.Lab，每项最近一次
+    meds: str = ""  # 正在用的药（mirobody 用药记录的表格文字）
+    body_codes: tuple[str, ...] = ()  # 后台读报告认出的代码（如 ecg_alert）
+    body_line: str = ""  # 后台读好的身体情况：档案每轮带的一两行结论（§265 需求 5）
+    body_text: str = ""  # 完整的身体情况（追问依据时看）
+    body_day: date | None = None  # 哪天读的
+    body_states: tuple[str, ...] = ()  # 会持续的身体情况（body_reading.STATES 里的词）：排计划、出饮食用（§269）
 
 
 # ---- 身体成分与活动（spec [2026-10-23] §26）：有数据才算，不打乱已有指标的编号 ----------------------

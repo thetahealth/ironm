@@ -22,20 +22,30 @@ MINOR, SENIOR, PREGNANCY, CARDIAC, HYPERTENSION = (
     "cardiac",
     "hypertension",
 )
+ANEMIA, THYROID = "anemia", "hyperthyroid"  # 化验认出的（§265 需求 6）
+NO_IMPACT, VALSALVA = "no_impact", "no_valsalva"  # 后台读出的身体情况（§269）：骨质疏松、出血风险；不宜憋气
+FASTED = "no_fasted"  # 在用会引起低血糖的降糖药（§269）：不排空腹训练，只提示
 NAMES = {
     MINOR: "未满 18 岁",
     SENIOR: "60 岁以上",
     PREGNANCY: "孕期",
     CARDIAC: "有心脏病",
     HYPERTENSION: "有高血压",
+    ANEMIA: "有贫血",
+    THYROID: "甲功像甲亢",
+    NO_IMPACT: "不宜跳跃冲击",
+    VALSALVA: "不宜憋气发力",
 }
 # 每组至少几次：低于这个就是大重量
-MIN_REPS = {MINOR: 6, PREGNANCY: 8, CARDIAC: 8, HYPERTENSION: 8}
+MIN_REPS = {MINOR: 6, PREGNANCY: 8, CARDIAC: 8, HYPERTENSION: 8, ANEMIA: 8, THYROID: 8, VALSALVA: 8}
 WHY = {
     MINOR: "未成年人先学动作、不测极限〔K60〕",
     PREGNANCY: "孕期不憋气用力、不做跳跃这类易摔的动作〔K110〕；不做大重量",
     CARDIAC: "心脏病人加大强度前要先请医生评估〔K14〕",
     HYPERTENSION: "高血压不做大重量、不憋气〔K41〕",
+    ANEMIA: "贫血没纠正前不做大重量和高强度，先看医生〔K129〕",
+    THYROID: "甲亢没控制前不做大重量和高强度，先看内分泌科〔K129〕",
+    VALSALVA: "不宜憋气发力的不做大重量〔K41〕",
 }
 MINOR_DAYS = 3  # 未成年每周最多几练（K60：每周 2–3 次不连续的日子）
 _RISKS = {
@@ -43,6 +53,13 @@ _RISKS = {
     "cardiac": CARDIAC,
     "hypertension": HYPERTENSION,
     "bp_high": HYPERTENSION,
+    "ecg_alert": CARDIAC,  # 心电图有需要医生看的改变（§265）
+    "anemia_marked": ANEMIA,
+    "hyperthyroid": THYROID,
+    "osteo": NO_IMPACT,  # §269
+    "bleeding": NO_IMPACT,
+    "no_valsalva": VALSALVA,
+    "hypo_drug": FASTED,
 }
 
 
@@ -79,6 +96,10 @@ def plan_problems(plan: Plan, special: Collection[str]) -> tuple[list[str], list
                 problems.append(
                     f"孕期：{weekday_name(s.day)}的{item.exercise}是跳跃类，容易摔，换成不跳的动作〔K110〕"
                 )
+            elif NO_IMPACT in special and pattern == "plyo":  # §269 骨质疏松、出血风险
+                problems.append(
+                    f"{NAMES[NO_IMPACT]}：{weekday_name(s.day)}的{item.exercise}是跳跃类，换成不跳的动作〔K111〕"
+                )
             got = rep_range(item.reps)
             if got is None or pattern in ("cardio", "stretch"):
                 continue
@@ -91,12 +112,14 @@ def plan_problems(plan: Plan, special: Collection[str]) -> tuple[list[str], list
                     break
     if SENIOR in special:
         hints.append("60 岁以上：动作不练到力竭〔K59〕；65 岁以上每周至少 3 天加平衡练习〔K01〕")
+    if FASTED in special:
+        hints.append("在用会引起低血糖的降糖药：别安排早上空腹练，练前吃点东西、随身带糖〔K42〕")
     return problems, hints
 
 
 def is_special(problem: str) -> bool:
     """这条检查问题是不是特殊人群的硬规则（出预览前最后一道）。"""
-    return any(problem.startswith(NAMES[f] + "：") for f in MIN_REPS)
+    return any(problem.startswith(NAMES[f] + "：") for f in (*MIN_REPS, NO_IMPACT))
 
 
 def rules_text(special: Collection[str]) -> str:
@@ -112,6 +135,16 @@ def rules_text(special: Collection[str]) -> str:
         parts.append(f"有心脏病：每组至少 {MIN_REPS[CARDIAC]} 次，加大强度前先请医生评估")
     if HYPERTENSION in special:
         parts.append(f"有高血压：每组至少 {MIN_REPS[HYPERTENSION]} 次，不憋气")
+    if ANEMIA in special:
+        parts.append(f"有贫血：每组至少 {MIN_REPS[ANEMIA]} 次，不做高强度间歇和冲刺，先看医生查原因")
+    if THYROID in special:
+        parts.append(f"甲功像甲亢：每组至少 {MIN_REPS[THYROID]} 次，不做高强度间歇和冲刺，先看内分泌科")
+    if NO_IMPACT in special:
+        parts.append("不宜跳跃冲击（骨量少或有出血风险）：不排跳跃类动作，负重弯腰扭转先不做")
+    if VALSALVA in special:
+        parts.append(f"不宜憋气发力：每组至少 {MIN_REPS[VALSALVA]} 次，不憋气")
+    if FASTED in special:
+        parts.append("在用会引起低血糖的降糖药：不排早上空腹的训练，练前吃点东西")
     if SENIOR in special:
         parts.append("60 岁以上：不练到力竭，每周加平衡练习")
     if not parts:

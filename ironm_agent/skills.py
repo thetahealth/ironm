@@ -1,8 +1,9 @@
-"""各专业角色的规程（spec [2026-10-23] §8）：按问题和这一轮的情况自动装载最相关的 1–2 份。
+"""规程（spec [2026-10-23] §8、§255、§263）：目录每份一行，作答的模型用到再装（渐进式披露）；
+只有附了照片、新用户这两种情况先装对应的那份。
 
-规程写在 skills.yaml：做事步骤、判断规则、输出要点、禁忌；规程里的数字带依据库编号，装载时把这些资料
-一起交给角色（引用编号能通过核对）。规程只指导怎么作答，本身不作为出处。
-讲法规程（style）只管怎么讲，对得上就和讲内容的规程一起装载，不占名额（§88 起没有讲法规程了）。
+规程写在 skills.yaml（训练、饮食、恢复三份基础规程）和 skills/ 文件夹（一份一个 SKILL.md）：做事步骤、
+判断规则、输出要点、禁忌；规程里的数字带依据库编号，装上时把这些资料一起交给作答的模型（引用编号能通过核对）。
+规程只指导怎么作答，本身不作为出处。
 """
 
 from __future__ import annotations
@@ -23,8 +24,7 @@ SKILLS_PATH = Path(__file__).with_name("skills.yaml")
 SKILLS_DIR = Path(__file__).with_name("skills")  # 一份一个文件夹的新规程（spec [2026-10-23] §76）
 # 只在页面功能里用的规程（§201 视频出方案）：写法和文件夹规程一样，但不进对话的目录和路由
 PAGE_SKILLS_DIR = Path(__file__).with_name("page_skills")
-type Trigger = Literal["injury", "plan", "log", "image", "move", "lab", "metric", "new"]
-TRIGGER_BONUS = 2  # 这一轮的情况对得上时加的分（比问题里一个说法对得上更重要）
+type Trigger = Literal["image", "new", "report"]  # 看情况先装的：附了照片、新用户、传了病历化验单（§263、§270）
 
 
 class Example(ContractModel):
@@ -42,17 +42,14 @@ REF_HEAD = "参考："  # 第 2 层参考段的节名开头（§110）
 class Skill(ContractModel):
     id: str = Field(pattern=r"^[a-z]+(-[a-z]+)*$")
     role: Role | None = None
-    shared: bool = False  # 三个专业 Agent 都能装载（如数据解读，spec [2026-10-23] §20）
+    shared: bool = False  # 不属于训练、饮食、恢复哪一个领域（如身体数据与临床）
     name: str = Field(min_length=1, max_length=12)
     use: str = Field(min_length=4, max_length=60)  # 什么时候用（spec [2026-10-23] §22）
     brief: str = Field(
         default="", max_length=BRIEF_MAX
     )  # 第 0 层：目录里那一句"什么时候用"（§110）
     not_for: str = Field(default="", max_length=90)  # 什么时候不用、该用哪个
-    when: tuple[str, ...] = ()
     on: tuple[Trigger, ...] = ()
-    default: bool = False
-    style: bool = False  # 讲法规程：管怎么讲、不管讲什么
     steps: tuple[str, ...] = ()  # 做事步骤（基础规程没有，其余必须有）
     rules: tuple[str, ...] = ()
     output: tuple[str, ...] = ()
@@ -83,10 +80,6 @@ class Skill(ContractModel):
         found = _REF.findall(self.text(flags, full=True)) if self.core or self.body else []
         return tuple(dict.fromkeys([*self.refs, *found]))
 
-    def score(self, text: str, triggers: Collection[str]) -> int:
-        return sum(1 for w in self.when if w in text) + TRIGGER_BONUS * sum(
-            1 for t in self.on if t in triggers
-        )
 
     def sections(self) -> list[tuple[str, str]]:
         """分节：(节名, 内容)。文件夹规程按正文的"## "分；基础规程是参考段加示例（§110）。"""
@@ -218,15 +211,13 @@ def skills(path: Path = SKILLS_PATH, root: Path = SKILLS_DIR) -> tuple[Skill, ..
     ids = [x.id for x in data.skills]
     if len(ids) != len(set(ids)):
         raise ValueError("规程编号重复")
-    if any(x.style and x.default for x in data.skills):
-        raise ValueError("讲法规程不能当默认规程")
-    if any((x.role is None) != x.shared or (x.shared and x.default) for x in data.skills):
-        raise ValueError("规程要么属于一个角色，要么是共享的（共享规程不能当默认规程）")
+    if any((x.role is None) != x.shared for x in data.skills):
+        raise ValueError("规程要么属于一个领域，要么是共享的")
     if any(not x.core and not x.steps and not x.body for x in data.skills):
         raise ValueError("规程要有做事步骤或正文（基础规程除外）")
     if any(x.body and not x.card for x in data.skills):
         raise ValueError("文件夹规程正文要以「## 决策卡」或「## 步骤卡」开头（§99、§110）")
-    if any(not x.style and not x.brief for x in data.skills):
+    if any(not x.brief for x in data.skills):
         raise ValueError("规程要写 brief：目录里那一句什么时候用（§110）")
     if any(x.core and (x.role is None or not x.order or not x.rules) for x in data.skills):
         raise ValueError("基础规程要属于一个领域，并写明思考顺序和判断规则")
@@ -261,81 +252,23 @@ def prompt_of(chosen: Sequence[Skill], flags: Collection[str] = ()) -> str:
     )
 
 
-def core_of(role: Role) -> Skill | None:
-    """这个领域的基础规程（§74）。"""
-    return next((x for x in skills() if x.core and x.role == role), None)
-
-
-def with_cores(chosen: Sequence[Skill], domains: Collection[Role] = ()) -> list[Skill]:
-    """装了某个领域的规程（或路由说涉及这个领域，§75），就带上这个领域的基础规程（§74 需求 2），
-    基础规程排在前面，按训练、恢复、饮食。"""
-    have = {x.role for x in chosen if x.role is not None} | set(domains)
-    cores = [c for r in (Role.TRAINER, Role.RECOVERY, Role.NUTRITION) if r in have
-             and (c := core_of(r)) is not None and c not in chosen]  # fmt: skip
-    return [*cores, *chosen]
-
-
-# ---- 路由选 Skill（spec [2026-10-23] §21）------------------------------------------------------
-
-RULE_TRIGGERS: frozenset[str] = frozenset(
-    {"plan", "log", "image", "injury", "lab", "metric", "new"}
-)  # 路由看不到的系统情况；lab / metric：问题点到了化验指标 / 每天测的指标（spec [2026-10-23] §37）
-
-
-# ---- 单 Agent（spec [2026-10-23] §67 需求 2）：不按角色分，按这句话和情况跨领域选 ---------------------
-
-MAX_ANY = 3
-SAID_TRIGGERS: frozenset[str] = frozenset({"lab", "metric"})  # 他这句话点到的；其余是系统看到的情况
-
-
 def by_id(skill_id: str) -> Skill | None:
     return next((x for x in skills() if x.id == skill_id), None)
 
 
-def pick_any(
-    text: str,
-    triggers: Collection[str] = (),
-    drop: Collection[str] = (),
-    k: int = MAX_ANY,
-) -> list[Skill]:
-    """路由出错时退回的选法：所有领域里得分最高的 1–k 份（这一轮情况要求的排前面）；都对不上时不硬装，
-    由它看目录自己装（§67）。drop：这一轮不装的情况。"""
-    content = [x for x in skills() if not x.style and not x.core and not set(x.on) & set(drop)]
-    required = [x for x in content if any(t in RULE_TRIGGERS and t in triggers for t in x.on)]
-    scored = sorted(
-        ((x.score(text, triggers), i, x) for i, x in enumerate(content)),
-        key=lambda t: (-t[0], t[1]),
-    )
-    chosen = list(dict.fromkeys([*required, *(x for s, _, x in scored if s > 0)]))[:k]
-    style = [x for x in skills() if x.style and x.score(text, triggers) > 0]
-    return with_cores(chosen) + style
-
-
 def catalog_any() -> str:
-    """单 Agent 看的规程目录（第 0 层，§110）：编号和一句什么时候用，装漏了时据此自己补装；
-    基础规程也列上（什么都没装上时可以自己装、取它的参考段）。"""
-    return "；".join(f"{x.id}：{x.brief}" for x in skills() if not x.style)
+    """规程目录（渐进式披露的第一层，§255、§263）：全部规程每份一行，什么时候用、不用于什么；
+    作答的模型据此用到再装，没有常驻的。"""
+    return "\n".join(
+        f"- {x.id}（{x.name}）：{x.use}" + (f"；不用于：{x.not_for}" if x.not_for else "")
+        for x in skills()
+    )
 
 
-def pick_routed(
-    routed: Sequence[Skill],
-    domains: Collection[Role],
-    text: str,
-    triggers: Collection[str] = (),
-    drop: Collection[str] = (),
-    k: int = MAX_ANY,
-) -> list[Skill]:
-    """按意图路由选的（§75）：先放他话里点到的（化验、指标，§37），再放路由按他问的选的第一份，再放这一轮
-    系统情况要求的，最后路由选的其余，最多 k 份（§108：情况要求的曾占满名额，把他问的挤掉）；
-    带上涉及领域的基础规程；讲法规程对得上就一起装。drop：这一轮不装的情况。"""
-    content = [x for x in skills() if not x.style and not x.core and not set(x.on) & set(drop)]
+SITUATIONS: frozenset[str] = frozenset({"image", "new", "report"})  # 看情况先装的：附了照片、新用户、传了病历（不看说法，§255、§270）
 
-    def by(kinds: Collection[str]) -> list[Skill]:
-        return [x for x in content if any(t in kinds and t in triggers for t in x.on)]
 
-    said, situation = by(SAID_TRIGGERS), by(RULE_TRIGGERS - SAID_TRIGGERS)
-    allowed = set(content)
-    asked = [x for x in routed if x in allowed]
-    chosen = list(dict.fromkeys([*said, *asked[:1], *situation, *asked[1:]]))[:k]
-    style = [x for x in skills() if x.style and x.score(text, triggers) > 0]
-    return with_cores(chosen, domains) + style
+def situational(triggers: Collection[str]) -> list[Skill]:
+    """这一轮情况要求先装的规程（附了照片、新用户、传了病历化验单，§263、§270）；其余由作答的模型用到再装。"""
+    on = set(triggers) & SITUATIONS
+    return [x for x in skills() if not x.core and set(x.on) & on]

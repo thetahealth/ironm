@@ -244,6 +244,8 @@ make pg-install pg-init                # local PostgreSQL 18 + pgvector (needs m
 make run                               # http://127.0.0.1:18090
 ```
 
+For evaluation we use [mirobody-env](https://github.com/thetahealth/mirobody-env), which builds environments to test the agent thoroughly.
+
 ## 🙏 Acknowledgements
 
 The health data foundation comes from [mirobody](https://github.com/thetahealth/mirobody). Exercise images come from [wger](https://wger.de) and [Everkinetic](https://github.com/everkinetic/data) (CC BY-SA), food photos from Unsplash and Pexels, and leaderboard images from Wikimedia Commons. Authors and licences are recorded in `ironm_agent/*_images.yaml` and credited in the app. Images aren't stored in the repository; they're downloaded from that list at install time. Nutrition data draws on USDA FoodData Central. Speech and video transcription uses [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice) from Alibaba Tongyi Lab (FunASR model licence), run with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx); audio is extracted from videos with [PyAV](https://github.com/PyAV-Org/PyAV) (bundling FFmpeg libraries).
