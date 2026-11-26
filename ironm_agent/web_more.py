@@ -320,6 +320,14 @@ async def get_calendar(
         if x.log.done and first <= x.log.day < nxt:
             count[x.log.day] += sum(len(it.done_sets) or it.sets or 0 for it in x.log.items)
     sets = {d.isoformat(): n for d, n in count.items() if n}
+    # 练的那天练得最多的部位（月历格子里写一个字，§272 需求 5）
+    from ironm_agent.record import part_map, top_part
+
+    by_day: dict[date, list[Any]] = {}
+    for x in rows:
+        if x.log.done and first <= x.log.day < nxt:
+            by_day.setdefault(x.log.day, []).extend(x.log.items)
+    top_parts = {d.isoformat(): p for d, items in by_day.items() if (p := top_part(items, part_map()))}
     month_minutes = sum(x.log.minutes or 0 for x in rows if x.log.done and first <= x.log.day < nxt)
     return {
         "month": first.strftime("%Y-%m"),
@@ -332,6 +340,7 @@ async def get_calendar(
             if any(e["rest"] for e in v) and not any(e["done"] for e in v)
         ),
         "sets": sets,
+        "top_parts": top_parts,
         "month_minutes": month_minutes,
         "streak_days": checkin_streak({x.log.day for x in rows if x.log.done or x.log.rest}, today),
         **stats,

@@ -48,6 +48,7 @@ async def report_week(
     store: TrainingStore = TRAINING,
     meals: Any = MEALS,
     illness: Any = ILLNESS,
+    photos: Any = PHOTOS,
 ) -> dict[str, Any]:
     """上一周（上周一到周日）的周报。"""
     from ironm_agent.illness import sick_days
@@ -77,7 +78,19 @@ async def report_week(
     target = next((m.value for m in snap.metrics if m.key == "kcal_target"), None)
     report = week_report(monday, plan, since, logs, weights=snap.readings.weight, day_kcal=day_kcal,
                          kcal_target=target, sick=sick)  # fmt: skip
-    return {**report, "seen": await _seen(user_id) == monday}
+    # 那周练的每一天：哪次训练、练得最多的部位、拍没拍照（周报上七天一排用，§272 需求 10）
+    from ironm_agent.record import part_map, top_part
+
+    mine = [x for x in rows if x.log.done and monday <= x.log.day <= sunday]
+    with_photo: set[str] = set()
+    try:
+        with_photo = set(await photos.having(user_id, [x.id for x in mine])) if mine else set()
+    except Exception as e:
+        _log.warning("report photos unavailable: error_type=%s", type(e).__name__)
+    days: dict[str, dict[str, Any]] = {}
+    for x in sorted(mine, key=lambda r: r.created):
+        days.setdefault(x.log.day.isoformat(), {"id": x.id, "part": top_part(x.log.items, part_map()), "photo": x.id in with_photo})
+    return {**report, "days": days, "seen": await _seen(user_id) == monday}
 
 
 async def _seen(user_id: str) -> date | None:

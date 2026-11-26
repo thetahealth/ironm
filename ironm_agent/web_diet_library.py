@@ -82,6 +82,11 @@ def _brief(p: DietPlan) -> dict[str, Any]:
     }
 
 
+def _meals_brief(p: DietPlan) -> list[dict[str, Any]]:
+    slots = _days(p, None)["weekday"]["slots"]
+    return [{"slot": k, "name": v["name"], "kcal": round(v["kcal"]), "image": v["image"]} for k, v in slots.items() if v]
+
+
 def _found(plan_id: str) -> DietPlan:
     p = by_id(plan_id)
     if p is None:
@@ -92,7 +97,8 @@ def _found(plan_id: str) -> DietPlan:
 @router.get("/iron/api/diet/library")
 async def list_library(user_id: str = Depends(_verify())) -> dict[str, Any]:
     return {
-        "plans": [_brief(p) for p in library()],
+        # 列表每份带上工作日四顿的名字、热量和图（§282 饮食方案卡画四顿用，只读；按推荐份数）
+        "plans": [{**_brief(p), "weekday": _meals_brief(p)} for p in library()],
         "note": "每天的热量和蛋白质按推荐份数算；套用时按你的热量目标缩放。营养按食物库算（内容待审定）。",
     }
 

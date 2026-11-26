@@ -157,6 +157,30 @@ async def get_home(
     return {"boards": cards, "hot": await hot(rank, date.today())} | _meta()
 
 
+FEED_FILL = 6  # 一个榜上榜的不到这个数，用待评里评的人多的补上（开榜时都没票）
+
+
+@router.get("/iron/api/rank/feed")
+async def get_feed(
+    user_id: str = Depends(_verify()), tiers: TierStore = TIER, rank: RankStore = RANK
+) -> dict[str, Any]:
+    """首页瀑布流（§275）：六个榜要上瀑布的条目一次给全——上榜的全部、不到 6 个时补的待评、我投过的；
+    每条带最上面的一条评论、五档票数、属于哪个榜。排名和档位的算法不变，只是换一种摆法。"""
+    boards, items = [], []
+    for board, name, ic in BOARDS:
+        got = await _board(tiers, rank, user_id, board)
+        on = [r for r in got["items"] if r["rank"] is not None]
+        rest = sorted((r for r in got["items"] if r["rank"] is None), key=lambda r: -r["votes"])
+        fill = rest[: max(0, FEED_FILL - len(on))]
+        mine = [
+            r for r in rest[len(fill) :] if r["mine"]
+        ]  # 我投过、还没上榜也没被补上的：给"我评过的"用
+        items += [{**r, "board": board, "board_name": name} for r in on + fill + mine]
+        boards.append({"board": board, "name": name, "icon": ic, "people": got["people"],
+                       "total": len(got["items"]), "ranked": len(on), "waiting": len(rest)})  # fmt: skip
+    return {"boards": boards, "items": items, "hot": await hot(rank, date.today())} | _meta()
+
+
 @router.get("/iron/api/rank/board")
 async def get_board(
     board: str,

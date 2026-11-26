@@ -14,10 +14,11 @@ from ironm_agent.web_more import _verify
 
 router = APIRouter()
 _REF = re.compile(r"〔[^〕]*〕")  # 出处编号只在内部留底，不给用户看
+_SPEC = re.compile(r"[，,、]?\s*§\d+")  # 需求编号（"每周 3 天默认全身三练，§170"）也不给用户看（§282 复核时看到）
 
 
 def _plain(text: str) -> str:
-    return _REF.sub("", text).strip()
+    return _SPEC.sub("", _REF.sub("", text)).strip()
 
 
 def _plan(t: Any) -> dict[str, Any]:
@@ -38,6 +39,8 @@ def _plan(t: Any) -> dict[str, Any]:
         "place": PLACES.get(t.place, "健身房或在家"),
         "minutes": list(t.minutes),
         "days": sorted(t.weeks),
+        # 每档天数一周按顺序练哪几次（§282 方案卡和详情画轮练色块用，只读；排计划时照这个顺序放进能练的那几天）
+        "weeks": {str(d): list(names) for d, names in sorted(t.weeks.items())},
         "why": _plain(t.why),
         "intensity": _plain(t.intensity),
         "progress": _plain(t.progress),

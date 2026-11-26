@@ -8,6 +8,9 @@
 
 You slept 5 hours, your knee has an old injury, and you only packed one pair of dumbbells for the trip. It knows, and tells you how to train and how much to eat today.
 
+<img src="docs/readme/camera-check-en.gif" width="300" alt="Camera form check: a side-view squat; the first rep is too shallow and it says “Go lower” on the spot, the second rep reaches depth and the count goes up (AI-generated footage; the skeleton, count and cue are computed by IronM)" />
+<img src="docs/readme/chat-answer-en.gif" width="240" alt="Answers from your data: asked “I only slept 5 hours last night, should I still train?”, it compares sleep and resting heart rate with your usual and says train at about 70% (IronM web app in Chinese; a real answer from the simulation test with simulated data)" />
+
 <a href="https://github.com/thetahealth/mirobody">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/readme/powered-by-mirobody-dark.svg">
@@ -38,7 +41,7 @@ Open source · Use it online or run it yourself · Uses your own LLM
 
 </div>
 
-- 📷 **It watches you train through your camera**: the moment your back rounds on a squat, it tells you out loud
+- 📷 **It watches you train through your camera**: the moment a squat rep is too shallow, it tells you out loud
 - 🧠 **A plan that's only yours**: it remembers your injuries, equipment, sleep and every set you've done, and works out the weight for your next one
 - ✋ **Every change asks you first**: plan tweaks and calorie changes are suggestions; nothing takes effect until you confirm, and you can always undo
 - 🔓 **Open source and free**: bring your own LLM, and keep all your data on your own machine if you like

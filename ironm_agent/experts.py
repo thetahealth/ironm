@@ -237,6 +237,36 @@ _PATCH_ASK = (
 
 _MARKS = re.compile(r"〔[^〔〕]{1,12}〕|</?statement>|<cite>.*?</cite>|\s")
 
+_LOOKUP_ASK = (
+    "（系统核对，不是用户说的；用户看不到你上一版和这条。直接改正，回答里不提格式、不道歉）"
+    "下面这些数找不到出处，照现在这样结论会被删掉：要用这些数，先用工具查到再写（工具列表里没有能查的，先用 load_skill "
+    "装对应的规程再查）；查不到就不写这个数，只说判断。改好后按原来的 JSON 格式交完整的回答。找不到出处的："
+)
+
+
+_KCAL_TOOLS = ("chain_menu", "nutrition_calc")  # 热量查得到的地方：连锁店菜单、食物库（§273）
+
+
+def _lookup_ask(toolbox: Toolbox, problems: Sequence[str]) -> str:
+    """退回去查的那句话（§273）。缺出处的是热量时，把查菜单、算营养的工具直接开给它并点名：
+    只叫它自己去装规程，它常常不装（11-25 真实模型：麦当劳追问退回后仍只查了依据库）。"""
+    extra = ""
+    if any("热量" in p for p in problems):
+        toolbox.open_pro(_KCAL_TOOLS)
+        have = [n for n in _KCAL_TOOLS if any(x.get("function", {}).get("name") == n for x in toolbox.schemas())]
+        if have:
+            extra = f"热量用 {'、'.join(have)} 查（连锁店的餐品用 chain_menu，把几样写进 pick 由它算合计；家常菜用 nutrition_calc）。"
+    return _LOOKUP_ASK.replace("找不到出处的：", extra + "找不到出处的：") + json.dumps(list(problems), ensure_ascii=False)
+
+
+def conclusion_lost(before: Opinion, after: Opinion) -> bool:
+    """代码硬改会让结论丢掉吗（§273）：回答删光了，或者原来第一句的开头不在改后的回答里。"""
+    if not after.speak or not after.answer.strip():
+        return True
+    first = next((x for x in sentences(re.sub(r"<statement>|</statement>|<cite>.*?</cite>", "", before.answer)) if x.strip()), "")
+    head = _bare(first)[:8]
+    return bool(head) and head not in _bare(after.answer)
+
 
 def _bare(text: str) -> str:
     return _MARKS.sub("", text).rstrip("…。；！？.")
@@ -428,11 +458,19 @@ async def _loop(
         if fixes >= 1:
             if opinion is None:
                 return Opinion(role=spec.role, speak=False, reason="没能给出规定格式的意见")
+            repaired = _repaired(opinion, toolbox.evidence, text)
+            if not trace.get("lookup") and conclusion_lost(opinion, repaired):  # §273：先回去查一次
+                trace["lookup"] = True
+                messages.append({"role": "assistant", "content": reply.content})
+                messages.append({"role": "user", "content": _lookup_ask(toolbox, problems)})
+                offered = bool(toolbox.schemas()) and not trace.get("late")
+                only_actions = False
+                continue
             trace["repaired"] = True
             _log.info(
                 "expert opinion repaired: role=%s problems=%d", spec.role.value, len(problems)
             )
-            return _settled(_repaired(opinion, toolbox.evidence, text), desk, trace)
+            return _settled(repaired, desk, trace)
         fixes += 1
         messages.append({"role": "assistant", "content": reply.content})
         # 回答读得出来：只让它把被指出的那几句改好交回来，不整段重写（§156）
@@ -457,11 +495,19 @@ async def _loop(
             if not still:
                 return _settled(opinion, desk, trace)
             trace["still"] = problem_kinds(still)  # 改完还剩哪类问题（只留类别）
+            repaired = _repaired(opinion, toolbox.evidence, text)
+            if conclusion_lost(opinion, repaired):  # §273：结论要丢、回答要删光：先带工具回去查一次
+                trace["lookup"] = True
+                messages.append({"role": "assistant", "content": patch.content if patch else reply.content})
+                messages.append({"role": "user", "content": _lookup_ask(toolbox, still)})
+                offered = bool(toolbox.schemas()) and not trace.get("late")
+                only_actions = False
+                continue
             trace["repaired"] = True
             _log.info(
                 "expert opinion repaired: role=%s problems=%d", spec.role.value, len(problems)
             )
-            return _settled(_repaired(opinion, toolbox.evidence, text), desk, trace)
+            return _settled(repaired, desk, trace)
         messages.append(
             {
                 "role": "user",

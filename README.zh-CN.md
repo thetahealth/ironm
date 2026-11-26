@@ -8,6 +8,9 @@
 
 昨晚只睡了 5 小时、膝盖有旧伤、出差只带了一对哑铃，它都知道，然后告诉你今天怎么练、吃多少。
 
+<img src="docs/readme/camera-check-zh.gif" width="300" alt="摄像头看动作：侧面拍深蹲，第一下蹲浅了，当场提示「再蹲低点」，第二下蹲到位计数加一（AI 生成画面，骨架、计数和提醒是 IronM 真实识别和判断的）" />
+<img src="docs/readme/chat-answer-zh.gif" width="240" alt="结合数据回答：问「昨晚只睡了 5 个小时，今天还练吗？」，它拿睡眠、静息心率和平时比，回答「今天照练，但按七成来」（界面是 IronM 网页版，回答是模拟测试里的真实回答，数据是模拟的）" />
+
 <a href="https://github.com/thetahealth/mirobody">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/readme/powered-by-mirobody-zh-dark.svg">
@@ -38,7 +41,7 @@
 
 </div>
 
-- 📷 **打开摄像头，它看着你练**：深蹲塌腰的那一下，当场用语音提醒你
+- 📷 **打开摄像头，它看着你练**：深蹲蹲得不够深的那一下，当场用语音提醒你
 - 🧠 **只属于你的计划**：记得你的伤病、器械、睡眠和练过的每一组，下一组该用多重它算好
 - ✋ **每个改动都先问你**：调计划、加热量都是建议，你点确认才生效，随时能撤
 - 🔓 **开源、免费**：用你自己的大模型，数据可以全放在自己电脑上

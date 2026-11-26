@@ -682,6 +682,8 @@ async def get_training(
     return {
         "plan": plan.plan.model_dump(mode="json") if plan else None,
         "plan_lines": plan.plan.lines() if plan else [],
+        # 这套计划从哪天开始用（改动链最早那一版），计划页写"第几周"（§278，只读）
+        "plan_start": (plan.start or plan.created.date()).isoformat() if plan else None,
         "targets": {  # 每个动作的下次目标（spec [2026-10-23] §18 需求 4）
             k: {
                 "text": t.text(),
@@ -853,6 +855,11 @@ router.include_router(_my_model)
 from ironm_agent.web_achievements import router as _achievements  # noqa: E402
 
 router.include_router(_achievements)
+
+# 记录页重排（spec [2026-10-23] §272）
+from ironm_agent.web_record import router as _record  # noqa: E402
+
+router.include_router(_record)
 
 # 图鉴里的方案库（spec [2026-11-05] §161）
 from ironm_agent.web_atlas import router as _atlas  # noqa: E402

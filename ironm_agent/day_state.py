@@ -131,13 +131,17 @@ def lines(
     *,
     today: date,
     plan_name: str | None,
+    has_plan: bool = True,
     checkins: Sequence[Any] = (),
     illness: str = "",
     pains: Sequence[tuple[str, date]] = (),
 ) -> list[str]:
-    """共享档案第一段"今天"：每条写明时间或来源。checkins：今天的打卡（StoredLog）。"""
+    """共享档案第一段"今天"：每条写明时间或来源。checkins：今天的打卡（StoredLog）。
+    has_plan：有没有训练计划；没有时写"还没有训练计划"，不写成按计划休息（§272）。"""
     out = []
-    if plan_name is None:
+    if not has_plan:
+        out.append("还没有训练计划（今天没有安排）")
+    elif plan_name is None:
         out.append("按计划：休息")
     else:
         out.append(f"按计划：{plan_name}")

@@ -195,6 +195,7 @@ def coach_messages(history: Sequence[Any], undoable: Sequence[str] = ()) -> list
     rows: list[dict[str, Any]] = []
     open_by_key: dict[str, dict[str, Any]] = {}  # 每个编号最近一条还没记上选择的
     targets: dict[Any, dict[str, Any]] = {}  # 哪天 → 那天的"下次目标"那一条
+    target_lines: dict[Any, dict[str, str]] = {}  # 哪天 → 每个动作（编号）最新的那一行
     for c in sorted(history, key=lambda c: c.at):
         if c.change in _CHOICE:
             said = {"decision": _CHOICE[c.change], "at": c.at.isoformat()}
@@ -212,7 +213,11 @@ def coach_messages(history: Sequence[Any], undoable: Sequence[str] = ()) -> list
                 row = targets[c.day] = {**_row(c), "kind": "targets", "lines": [], "why": "", "before": ""}
                 rows.append(row)
             line = c.after if c.change != "removed" else f"{c.before}（已解除）"
-            row["lines"].append(f"{line}（{c.why}）" if c.why and c.change != "removed" else line)  # 每个动作带它自己的理由（§237）
+            line = f"{line}（{c.why}）" if c.why and c.change != "removed" else line  # 每个动作带它自己的理由（§237）
+            said = target_lines.setdefault(c.day, {})
+            said.pop(c.key, None)  # 同一个动作同一天变过几次：只留最后一次的，排到最后（§276，§113 最近的为准）
+            said[c.key] = line
+            row["lines"] = list(said.values())
             row["at"] = c.at.isoformat()
             row["title"] = f"定了 {len(row['lines'])} 个动作的下次目标"
             continue

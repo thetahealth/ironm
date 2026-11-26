@@ -356,7 +356,7 @@ def labs_line(labs: Sequence[Lab], today: date) -> str:
         if x.day and (today - x.day).days > 365:
             when += "，一年多以前"
         judged = f"{x.verdict}，" if x.verdict else ""
-        ref = f"参考 {x.ref}" if x.ref else "化验单没印参考范围：不说偏高偏低和正不正常"
+        ref = f"参考 {x.ref}" if x.ref else "化验单没印参考范围：不说偏高偏低、缺乏不足和正不正常（资料、指南的通用标准也不用）"
         parts.append(f"{x.name} {x.value}{(' ' + x.unit) if x.unit else ''}（{judged}{ref}；{when}）")
     return "；".join(parts)
 

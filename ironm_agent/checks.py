@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from ironm_agent.kb import Entry
 from ironm_agent.numbers import traced, written_numbers
@@ -60,7 +60,8 @@ def _statement_problems(seg_text: str, cites: Sequence[str], *, support: Mapping
                         entries: Mapping[str, Entry], calcs: Mapping[str, str], own: list[float]) -> list[str]:  # fmt: skip
     bad_rows = [c for c in cites if c not in support]
     if bad_rows:
-        return [f"引用了不存在的数据编号：{'、'.join(bad_rows)}"]
+        where = "" if support else "（这一轮没有数据行：他的数据在档案和计算结果里，去掉 <statement> 标记，句末标〔C编号〕）"
+        return [f"引用了不存在的数据编号：{'、'.join(bad_rows)}{where}"]
     refs = [r for r in KB_REF.findall(seg_text) if r in entries]
     data = [v for c in cites for v in support[c]] + _calc_numbers(seg_text, calcs)
     coefs = [v for r in refs for v in written_numbers(entries[r].as_evidence())]
@@ -79,6 +80,7 @@ def _sentence_problems(
     calcs: Mapping[str, str],
     own: list[float],
     experience: Sequence[float] | None = None,
+    rows: bool = True,
 ) -> list[str]:
     if EXPERIENCE in sentence:
         # 专业 Agent 凭经验说的：不核对数字（experience 为 None），热量除外——热量要照菜单、食物库或计算（§256）；
@@ -109,7 +111,8 @@ def _sentence_problems(
     where = (
         f"所引的{'、'.join(refs)}"
         if refs
-        else "这一句（没有标出处：用到用户数据要写成 <statement>这句话<cite>[r编号]</cite></statement>，"
+        else "这一句（没有标出处：" + ("用到用户数据要写成 <statement>这句话<cite>[r编号]</cite></statement>，" if rows
+                               else "他本人的数据在档案和计算结果里，标〔C编号〕；") +  # 没有数据行不教 r 编号（§274）
         "用到资料要在句末写〔K编号〕，用到指标计算结果写〔C编号〕，凭专业经验说的写〔经验〕）"
     )
     return [f"「{sentence.strip()[:30]}…」里的数字 {_shown(loose)} 在{where}里找不到"]
@@ -145,7 +148,7 @@ def check_text(
             continue
         for sentence in sentences(seg.text):
             problems += _sentence_problems(
-                sentence, entries=entries, calcs=calcs, own=own, experience=experience
+                sentence, entries=entries, calcs=calcs, own=own, experience=experience, rows=bool(support)
             )
     for sentence in sentences(_STATEMENT_TAG.sub("", _CITE.sub("", text))):
         wrong = _false_zero(sentence)
@@ -215,10 +218,19 @@ def repair(
     def hold(m: re.Match[str]) -> str:
         whole = m.group(0)
         seg = next((s for s in parse(whole) if s.statement), None)
-        if seg is None or _statement_problems(
-            seg.text, seg.cites, support=support, entries=entries, calcs=calcs, own=own
-        ):
-            return ""  # 个人数据说不准就不说
+        if seg is None:
+            return ""
+        if _statement_problems(seg.text, seg.cites, support=support, entries=entries, calcs=calcs, own=own):
+            # 个人数据说不准就不说：只删对不上的那一小段，同一句里的判断留下（§273）
+            cite = "".join(f"[{c}]" for c in seg.cites)
+
+            def fits(part: str) -> bool:
+                return not _statement_problems(part, seg.cites, support=support, entries=entries, calcs=calcs, own=own)
+
+            left = trim(seg.text, fits)
+            if left is None:
+                return ""
+            whole = f"<statement>{left}<cite>{cite}</cite></statement>"
         kept.append(whole)
         return _tag(len(kept) - 1)
 
@@ -238,7 +250,14 @@ def repair(
             if _sentence_problems(
                 labeled, entries=entries, calcs=calcs, own=own, experience=experience
             ):
-                continue  # 整合时加出来的数字：删掉这句
+                # 改标经验后还对不上（没出处的热量、整合时加出来的数）：只删那一小段，判断留下（§273）
+                # 留下的小段不带数（除了他自己说的）：删掉主语后剩下的数多半是同一件凭印象写的事
+                left = trim(labeled, lambda part: not [v for v in written_numbers(ANY_REF.sub("", part))
+                                                       if not traced(v, own)] and not _sentence_problems(
+                    part, entries=entries, calcs=calcs, own=own, experience=experience))
+                if left is not None:
+                    out.append(left)
+                continue
             out.append(labeled)
         else:
             out.append(sentence)
@@ -248,18 +267,90 @@ def repair(
     return repaired.strip()
 
 
+_CLAUSE = re.compile(r"[^，,、：:]*[，,、：:]?")
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+_MIN_LEFT = 4  # 删掉对不上的小段后，剩下至少几个汉字才留（§273）
+
+
+def trim(sentence: str, ok: Callable[[str], bool]) -> str | None:
+    """一句里对不上的数所在的那一小段（逗号、顿号、冒号隔开的）删掉，其余留下（§273）。
+    ok(句子) 判断一段是否通过核对；出处标记、句末标点照留。删不出能用的（没删掉什么、剩下太短、仍不通过）返回 None。"""
+    marks = "".join(ANY_REF.findall(sentence))
+    body = ANY_REF.sub("", sentence)
+    m = re.search(r"[。！？；\n\s]*$", body)
+    end = m.group(0) if m else ""
+    core = body[: len(body) - len(end)]
+    parts = [p for p in _CLAUSE.findall(core) if p]
+    tail = end.strip() or "。"
+    kept = [p for p in parts if ok(p.rstrip("，,、：: ") + tail + marks)]
+    if len(kept) == len(parts) or not kept:
+        return None
+    left = "".join(kept).rstrip("，,、：: ")
+    if len(_CJK.findall(left)) < _MIN_LEFT:
+        return None
+    out = left + tail + marks + end[len(end.rstrip()) :]
+    return out if ok(out) else None
+
+
 # 数字后面跟的单位：补出处时要求资料里同一个数后面也是这个单位，免得"3 组"对上资料里不相干的 3（审查 11-05）
 _UNIT = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:[–\-~～至到]\s*(\d+(?:\.\d+)?)\s*)?([%％℃°]|[a-zA-Z]{1,4}|[\u4e00-\u9fff]{1,2})"
+    r"(\d+(?:\.\d+)?)\s*(?:[–\-~～至到]\s*(\d+(?:\.\d+)?)\s*)?([%％℃°]|[μµ]?[a-zA-Z]{1,4}|[\u4e00-\u9fff]{1,2})?"
 )
+# 数后面跟的这些才算单位（§274）：别的字（"520 比参考"的"比参"）不算，那个数按没单位对
+UNIT_WORDS = frozenset(
+    "千卡 大卡 卡 克 毫克 千克 公斤 斤 次 组 分钟 分 秒 小时 天 周 个月 月 年 岁 厘米 米 公里 步 毫升 升 杯 份 个 块 片 勺 碗 "
+    "倍 度 次/分 毫米 毫摩 微摩 单位 粒 支 瓶 盒 层 节 圈 轮 下 口".split()
+)
+
+
+def _unit_of(raw: str) -> str:
+    if not raw:
+        return ""
+    if raw in "%％℃°" or raw[0] in "μµ" or raw[0].isascii():
+        return raw.lower()
+    if raw in UNIT_WORDS:
+        return raw
+    return raw[0] if raw[0] in UNIT_WORDS else ""
 _ABOUT_HIM = re.compile(r"你|您")
 
 
 def _units(text: str) -> set[tuple[float, str]]:
+    """数和它的单位；后面不是单位的记成空字符串（§274）。"""
     out: set[tuple[float, str]] = set()
     for a, b, u in _UNIT.findall(text):  # 范围"3–4 周"：两头都算带这个单位
-        out |= {(float(x), u.lower()) for x in (a, b) if x}
+        out |= {(float(x), _unit_of(u)) for x in (a, b) if x}
     return out
+
+
+def _bigrams(text: str) -> set[str]:
+    t = "".join(_CJK.findall(text))
+    return {t[i : i + 2] for i in range(len(t) - 1)}
+
+
+def _closest(sentence: str, ids: Sequence[str], calcs: Mapping[str, str]) -> str | None:
+    """几份计算结果都有这个数时挑哪份（§274）：和这句用词最接近的，再看内容最短（只说这件事的）。
+    热量几份分不出远近时不猜（"目标 2225"和"上周吃了 2225"是两回事），返回 None 照旧退回。"""
+    if len(ids) == 1:
+        return ids[0]
+    near = {c: len(_bigrams(sentence) & _bigrams(calcs[c])) for c in ids}
+    top = max(near.values())
+    tied = [c for c in ids if near[c] == top]
+    if len(tied) > 1 and _energy(sentence):
+        return None
+    return min(tied, key=lambda c: len(calcs[c]))
+
+
+def _distinct(v: float) -> bool:
+    """没带单位的数，够特别才去出处里找（三位数以上或带小数）：小整数凑巧对上的太多（§274）。"""
+    return abs(v) >= 100 or v != int(v)
+
+
+def _matches(w: tuple[float, str], text: str) -> bool:
+    """出处里有这个数：带单位的要单位对得上；没单位的要够特别、出处里写着这个数。"""
+    v, u = w
+    if u:
+        return any(abs(v - hv) < 1e-9 and u[:1] == hu[:1] for hv, hu in _units(text))
+    return _distinct(v) and any(abs(v - x) < 1e-9 for x in written_numbers(text))
 
 
 def _source_for(sentence: str, loose: Sequence[float], *, cited: Sequence[str], entries: Mapping[str, Entry],
@@ -272,16 +363,16 @@ def _source_for(sentence: str, loose: Sequence[float], *, cited: Sequence[str], 
         return None  # 有的数没带单位：说不准是哪来的
 
     def same(text: str) -> bool:
-        have = _units(text)
-        return all(any(abs(v - hv) < 1e-9 and u[:1] == hu[:1] for hv, hu in have) for v, u in want)
+        return all(_matches(w, text) for w in want)
 
     def kb(ids: Sequence[str]) -> list[str]:
         return [r for r in ids if r in entries and same(entries[r].as_evidence())]
 
     if hit := kb(cited):
         return f"〔{hit[0]}〕"
-    if len(hit := [c for c in calcs if same(calcs[c])]) == 1:
-        return f"〔{hit[0]}〕"
+    if hit := [c for c in calcs if same(calcs[c])]:  # 几份都有：标最贴近的那份（§274）
+        best = _closest(sentence, hit, calcs)
+        return f"〔{best}〕" if best else None
     if len(hit := kb([r for r in entries if r not in cited])) == 1:
         return f"〔{hit[0]}〕"
     if _ABOUT_HIM.search(sentence) and len(
@@ -297,13 +388,20 @@ def _covered(want: set[tuple[float, str]], *, cited: Sequence[str], entries: Map
     剩下的能由已对上的数相加减算出来也算。都对不上返回 None。"""
     marks: list[str] = []
     left = set(want)
-    pools = [*((f"〔{c}〕", calcs[c]) for c in calcs),
-             *((f"〔{r}〕", entries[r].as_evidence()) for r in dict.fromkeys([*cited, *entries]) if r in entries)]  # fmt: skip
-    def has(text: str, w: tuple[float, str]) -> bool:
-        return any(abs(w[0] - hv) < 1e-9 and w[1][:1] == hu[:1] for hv, hu in _units(text))
+    order = sorted(calcs, key=lambda c: len(calcs[c]))  # 分处找出处：短的（只说这件事的）在前
+    sure = [*((f"〔{r}〕", entries[r].as_evidence()) for r in cited if r in entries),
+            *((f"〔{c}〕", calcs[c]) for c in order)]  # fmt: skip
+    other = [(f"〔{r}〕", entries[r].as_evidence()) for r in entries if r not in cited]
+    pools = [*sure, *other]
 
-    if any(sum(has(text, w) for _, text in pools) > 1 for w in want):
-        return None  # 几处都对得上：可能认错，照旧退回（审查 11-05）
+    def has(text: str, w: tuple[float, str]) -> bool:
+        return _matches(w, text)
+
+    # 资料几条都对得上、计算结果和已引的资料里又没有：可能认错，不猜（审查 11-05）；计算结果几份都有标最短的（§274）
+    if any(not any(has(t, w) for _, t in sure) and sum(has(t, w) for _, t in other) > 1 for w in want):
+        return None
+    if any(w[1][:1] in ("千", "大", "k") and sum(has(calcs[c], w) for c in calcs) > 1 for w in want):
+        return None  # 热量几份计算结果都有：可能是两回事（目标和吃了的），不猜（§274）
     for mark, text in pools:
         got = {w for w in left if has(text, w)}
         if got:
@@ -329,37 +427,71 @@ def autocite(
     question: str,
     calcs: Mapping[str, str] | None = None,
 ) -> str:
-    """没写出处、数字却都能在这一轮的资料、计算、健康数据里对上的句子，由代码在句末补上出处（§165），
-    省一次退回模型。只补没写任何出处的句子；对不上、或可能认错（几处都对得上）的不动，照旧退回。"""
+    """出处由代码来标（§165、§274），省一次退回模型：
+    - 没标或标的出处里没有这个数：数（连同单位）在这一轮的资料、计算、健康数据里找得到就标上；计算结果几份都有标最贴近的；
+    - 写了不存在的编号的去掉；写成他本人数据却引了不存在的数据行的，拆掉标记再按上面补；
+    - 哪都找不到、不是说他本人（没有"你"）、也不是热量的：标〔经验〕（退回改不好时代码最后也这么标）。
+    说他本人的数、热量对不上的不动，照旧退回模型。"""
+    from mirobody.kernel.citations import parse
+
     calcs = calcs or {}
     own = written_numbers(question)
     cited = [r for r in dict.fromkeys(KB_REF.findall(text)) if r in entries]
     changed = False
 
+    def known(ref: str) -> bool:
+        return ref in entries or ref in calcs or ref == "经验"
+
     def fix(m: re.Match[str]) -> str:
         nonlocal changed
         sentence = m.group(0)
-        if not sentence.strip() or ANY_REF.search(sentence) or "<" in sentence or "⟦" in sentence:
+        if not sentence.strip() or "<" in sentence or "⟦" in sentence:
             return sentence
-        loose = [v for v in written_numbers(sentence) if not traced(v, own)]
-        if not loose:
-            return sentence
-        mark = _source_for(sentence, loose, cited=cited, entries=entries, calcs=calcs, support=support)
-        if mark is None:
-            return sentence
-        changed = True
-        body = sentence.rstrip("\n")
-        tail = sentence[len(body) :]
-        if mark.startswith("<cite>"):
+        s2 = re.sub(r"〔(K\d{2,4}|C\d{1,3})〕", lambda r: r.group(0) if known(r.group(1)) else "", sentence)
+        if not _sentence_problems(s2, entries=entries, calcs=calcs, own=own):
+            changed = changed or s2 != sentence
+            return s2
+        if EXPERIENCE in s2:  # 经验句里没出处的热量：照旧退回（§256）
+            changed = changed or s2 != sentence
+            return s2
+        bare = ANY_REF.sub("", s2)
+        pool = [v for r in KB_REF.findall(s2) if r in entries for v in written_numbers(entries[r].as_evidence())]
+        pool += _calc_numbers(s2, calcs) + own
+        loose = [v for v in written_numbers(bare) if not traced(v, pool)]
+        mark = _source_for(bare, loose, cited=cited, entries=entries, calcs=calcs, support=support) if loose else None
+        body = s2.rstrip("\n")
+        tail = s2[len(body) :]
+        if mark is not None and mark.startswith("<cite>"):
+            if ANY_REF.search(s2):  # 已经标了资料或计算、另一半是他的数据：说不准，照旧退回
+                changed = changed or s2 != sentence
+                return s2
             lead = _LEAD.match(body)
             n = lead.end() if lead else 0  # 列表的"- "、"1. "留在标记外面
+            changed = True
             return f"{body[:n]}<statement>{body[n:]}{mark}</statement>{tail}"
-        return body + mark + tail
+        if mark is not None:
+            out = body + mark + tail
+        elif not _ABOUT_HIM.search(bare) and not _energy(bare):
+            out = _label_experience(s2)  # 常规的经验数：直接标经验，不退回（§274）
+        else:
+            changed = changed or s2 != sentence
+            return s2
+        if _sentence_problems(out, entries=entries, calcs=calcs, own=own):
+            changed = changed or s2 != sentence
+            return s2
+        changed = True
+        return out
 
     held: list[str] = []
 
     def hold(m: re.Match[str]) -> str:
-        held.append(m.group(0))
+        nonlocal changed
+        whole = m.group(0)
+        seg = next((x for x in parse(whole) if x.statement), None)
+        if seg is not None and seg.cites and all(c not in support for c in seg.cites):
+            changed = True  # 引了不存在的数据行：拆掉标记，按普通句子补出处（§274）
+            return seg.text
+        held.append(whole)
         return _tag(len(held) - 1)
 
     body = _SENTENCE.sub(fix, _STATEMENT.sub(hold, text))  # 带数据编号的句子不动

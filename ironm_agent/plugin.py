@@ -1224,7 +1224,7 @@ class IronMAgent:
         from ironm_agent.protools.movement import JOINT_NAMES
 
         named = [(JOINT_NAMES.get(p, p), d) for p, d in pains]
-        out = day_lines(state, today=today, plan_name=session.name if session else None,
+        out = day_lines(state, today=today, plan_name=session.name if session else None, has_plan=plan is not None,
                         checkins=checkins, illness=illness_line(ill, today), pains=named)  # fmt: skip
         coach = await self._coach_state(user_id)
         item = coach.item("today") if coach is not None and coach.day == today else None
